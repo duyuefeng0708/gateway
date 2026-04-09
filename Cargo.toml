@@ -1,0 +1,49 @@
+[workspace]
+members = [
+    "crates/gateway-common",
+    "crates/gateway-anonymizer",
+    "crates/gateway-proxy",
+    "crates/gateway-cli",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/motiful/gateway"
+
+[workspace.dependencies]
+# Shared across crates
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+uuid = { version = "1", features = ["v4"] }
+sha2 = "0.10"
+chrono = { version = "0.4", features = ["serde"] }
+regex = "1"
+async-trait = "0.1"
+
+# HTTP / proxy
+axum = { version = "0.8", features = ["macros"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+tower = { version = "0.5", features = ["full"] }
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+hyper = { version = "1", features = ["full"] }
+
+# Model / Ollama
+ollama-rs = { version = "0.3", features = ["stream"] }
+
+# Database
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# CLI / TUI
+clap = { version = "4", features = ["derive"] }
+ratatui = "0.29"
+crossterm = "0.28"
+
+# Testing
+assert_matches = "1"

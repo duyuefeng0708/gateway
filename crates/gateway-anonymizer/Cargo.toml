@@ -1,0 +1,24 @@
+[package]
+name = "gateway-anonymizer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+gateway-common = { path = "../gateway-common" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+sha2.workspace = true
+chrono.workspace = true
+regex.workspace = true
+ollama-rs.workspace = true
+async-trait.workspace = true
+rusqlite.workspace = true
+
+[dev-dependencies]
+assert_matches.workspace = true
+tokio = { workspace = true, features = ["test-util"] }

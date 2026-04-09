@@ -1,0 +1,17 @@
+[package]
+name = "gateway-common"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+sha2.workspace = true
+regex.workspace = true
+
+[dev-dependencies]
+assert_matches.workspace = true
