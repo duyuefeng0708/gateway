@@ -1,0 +1,5 @@
+{"prompt": "Please email alice@example.com about the meeting.", "spans": [{"type": "EMAIL", "start": 13, "end": 30, "text": "alice@example.com", "confidence": 1.0, "implicit": false}]}
+{"prompt": "My name is John Smith and my SSN is 123-45-6789.", "spans": [{"type": "PERSON", "start": 11, "end": 21, "text": "John Smith", "confidence": 1.0, "implicit": false}, {"type": "SSN", "start": 35, "end": 46, "text": "123-45-6789", "confidence": 1.0, "implicit": false}]}
+{"prompt": "Call me at (555) 867-5309 or reach me at bob.jones@work.org.", "spans": [{"type": "PHONE", "start": 11, "end": 25, "text": "(555) 867-5309", "confidence": 1.0, "implicit": false}, {"type": "EMAIL", "start": 41, "end": 57, "text": "bob.jones@work.org", "confidence": 1.0, "implicit": false}]}
+{"prompt": "The CEO of Acme Corp disclosed the quarterly earnings to analysts.", "spans": [{"type": "ORGANIZATION", "start": 11, "end": 20, "text": "Acme Corp", "confidence": 0.9, "implicit": false}, {"type": "PERSON", "start": 4, "end": 7, "text": "CEO", "confidence": 0.8, "implicit": true}]}
+{"prompt": "The weather in Paris will be sunny this weekend with temperatures around 22 degrees.", "spans": []}
