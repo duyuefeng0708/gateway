@@ -1,0 +1,2 @@
+[alias]
+build-ebpf = "build --manifest-path crates/gateway-ebpf-programs/Cargo.toml --target bpfel-unknown-none -Z build-std=core"

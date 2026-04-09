@@ -1,0 +1,27 @@
+[package]
+name = "gateway-ebpf-loader"
+version = "0.1.0"
+edition = "2021"
+description = "Userspace eBPF loader for the Privacy Gateway transparent interception"
+
+[lib]
+name = "gateway_ebpf_loader"
+path = "src/lib.rs"
+
+[[bin]]
+name = "gateway-ebpf-loader"
+path = "src/main.rs"
+
+[dependencies]
+aya = "0.13"
+aya-log = "0.2"
+tokio = { version = "1", features = ["full"] }
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = "1"
+
+[dev-dependencies]
+tempfile = "3"

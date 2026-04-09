@@ -4,6 +4,7 @@ members = [
     "crates/gateway-anonymizer",
     "crates/gateway-proxy",
     "crates/gateway-cli",
+    "crates/gateway-ebpf-loader",
 ]
 resolver = "2"
 

@@ -1,0 +1,7 @@
+endpoints:
+  - host: api.anthropic.com
+    port: 443
+  - host: api.openai.com
+    port: 443
+proxy_port: 8443
+dns_refresh_interval: 60

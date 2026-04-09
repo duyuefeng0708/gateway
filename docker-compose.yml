@@ -24,6 +24,26 @@ services:
     volumes:
       - ollama-models:/root/.ollama
 
+  gateway-ebpf:
+    build:
+      context: .
+      dockerfile: crates/gateway-ebpf-loader/Dockerfile
+    privileged: true
+    pid: host
+    network_mode: host
+    cap_add:
+      - BPF
+      - NET_ADMIN
+      - SYS_ADMIN
+    volumes:
+      - /sys/fs/bpf:/sys/fs/bpf
+      - /sys/fs/cgroup:/sys/fs/cgroup
+      - ./endpoints.yaml:/etc/gateway/endpoints.yaml:ro
+    command: ["gateway-ebpf-loader", "--config", "/etc/gateway/endpoints.yaml"]
+    depends_on:
+      gateway-proxy:
+        condition: service_started
+
 volumes:
   gateway-data:
   ollama-models:

@@ -101,6 +101,77 @@ cargo fmt --check
 | `gateway-anonymizer` | PII detection, placeholders, session store, audit |
 | `gateway-proxy` | Axum HTTP proxy server (binary: `gateway-proxy`) |
 | `gateway-cli` | CLI tools: `gateway doctor`, `gateway demo` |
+| `gateway-ebpf-loader` | Userspace eBPF loader for transparent interception |
+| `gateway-ebpf-programs` | eBPF kernel programs (cgroup/connect4 redirect) |
+
+## eBPF Transparent Interception
+
+The gateway can transparently intercept outbound LLM API connections using Linux eBPF, so applications connect to cloud LLM endpoints as usual but traffic is silently redirected through the privacy proxy.
+
+### Requirements
+
+- **Linux 5.15+** (for cgroup/connect4 BPF program support)
+- Docker with `--privileged` or `CAP_BPF` + `CAP_NET_ADMIN` + `CAP_SYS_ADMIN`
+- cgroup v2 mounted at `/sys/fs/cgroup`
+
+### How It Works
+
+The eBPF loader resolves configured LLM endpoint hostnames (e.g. `api.anthropic.com`, `api.openai.com`) to their IP addresses, then loads a cgroup/connect4 eBPF program that intercepts outbound TCP connections. When an application connects to a matched IP:port, the eBPF program rewrites the destination to `127.0.0.1:<proxy_port>`, routing the connection through the privacy gateway.
+
+DNS is re-resolved every 60 seconds (configurable) to handle IP changes.
+
+### Quick Start with Docker Compose
+
+```bash
+# Start the full stack including eBPF transparent interception
+docker compose up
+```
+
+The `gateway-ebpf` service starts automatically alongside `gateway-proxy`. It requires privileged mode for eBPF program loading.
+
+### Configuration
+
+Endpoints to intercept are configured in `endpoints.yaml` at the project root:
+
+```yaml
+endpoints:
+  - host: api.anthropic.com
+    port: 443
+  - host: api.openai.com
+    port: 443
+proxy_port: 8443
+dns_refresh_interval: 60
+```
+
+### Adding Custom Endpoints
+
+To redirect additional LLM providers through the privacy gateway, add entries to `endpoints.yaml`:
+
+```yaml
+endpoints:
+  - host: api.anthropic.com
+    port: 443
+  - host: api.openai.com
+    port: 443
+  - host: generativelanguage.googleapis.com
+    port: 443
+  - host: api.cohere.com
+    port: 443
+```
+
+Then restart the eBPF service:
+
+```bash
+docker compose restart gateway-ebpf
+```
+
+### Dry Run
+
+To validate the configuration and DNS resolution without loading eBPF programs:
+
+```bash
+cargo run -p gateway-ebpf-loader -- --config endpoints.yaml --dry-run
+```
 
 ### Running Locally
 
