@@ -1,0 +1,29 @@
+services:
+  gateway-proxy:
+    build: .
+    ports:
+      - "8443:8443"
+    environment:
+      - GATEWAY_LISTEN=0.0.0.0:8443
+      - GATEWAY_UPSTREAM=https://api.anthropic.com
+      - GATEWAY_OLLAMA_URL=http://gateway-ollama:11434
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+    volumes:
+      - gateway-data:/app/data
+    depends_on:
+      gateway-ollama:
+        condition: service_healthy
+
+  gateway-ollama:
+    image: ollama/ollama
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - ollama-models:/root/.ollama
+
+volumes:
+  gateway-data:
+  ollama-models:

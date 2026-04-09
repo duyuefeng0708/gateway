@@ -1,0 +1,15 @@
+include:
+  - docker-compose.yml
+
+services:
+  gateway-proxy:
+    environment:
+      - GATEWAY_UPSTREAM=http://cc-gateway:3000
+    depends_on:
+      cc-gateway:
+        condition: service_started
+
+  cc-gateway:
+    image: ghcr.io/motiful/cc-gateway:latest
+    ports:
+      - "3000:3000"
