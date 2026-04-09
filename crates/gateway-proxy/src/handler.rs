@@ -275,7 +275,7 @@ async fn handle_inner(
         if matches!(
             name_str.as_str(),
             "host" | "transfer-encoding" | "connection" | "content-length"
-                | "x-gateway-session"
+                | "x-gateway-session" | "authorization" | "x-api-key"
         ) {
             continue;
         }

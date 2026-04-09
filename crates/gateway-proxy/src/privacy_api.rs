@@ -105,7 +105,7 @@ async fn anonymize_inner(
             pii_type: s.pii_type.placeholder_prefix().to_string(),
             start: s.start,
             end: s.end,
-            text: s.text.clone(),
+            text: format!("[{}]", s.pii_type.placeholder_prefix()), // Never expose original PII
             confidence: s.confidence,
             implicit: s.implicit,
         })
