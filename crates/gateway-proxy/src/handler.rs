@@ -334,67 +334,70 @@ async fn handle_inner(
 
         let byte_stream = upstream_resp.bytes_stream();
 
-        // State captured by the stream closure.
+        // Shared state for the stream processing closure.
         let deanonymizer_clone = Arc::clone(&deanonymizer);
         let sse_format = effective_format;
+        let sse_buf = Arc::new(Mutex::new(crate::sse_buffer::SseLineBuffer::new()));
 
         let body_stream = byte_stream.then(move |chunk_result| {
             let deano = Arc::clone(&deanonymizer_clone);
+            let buf = Arc::clone(&sse_buf);
             async move {
                 match chunk_result {
                     Ok(chunk) => {
-                        let text = String::from_utf8_lossy(&chunk);
+                        // Buffer raw bytes until complete SSE events (\n\n) are available.
+                        // This prevents partial JSON lines from being parsed when TCP
+                        // delivers chunks at arbitrary byte boundaries.
+                        let mut buf_guard = buf.lock().await;
+                        let complete_events = buf_guard.push_bytes(&chunk);
+                        drop(buf_guard);
+
                         let mut output_lines = Vec::new();
 
-                        for line in text.split('\n') {
-                            if let Some(data) = line.strip_prefix("data: ") {
-                                let trimmed = data.trim();
-                                if trimmed == "[DONE]" {
-                                    // Flush remaining buffer at stream end.
-                                    let mut guard = deano.lock().await;
-                                    if let Some(remaining) = guard.flush() {
-                                        // Emit the flushed text as a synthetic delta.
-                                        let synth = build_sse_delta(
-                                            &remaining,
-                                            sse_format,
-                                        );
-                                        output_lines.push(format!("data: {synth}\n\n"));
-                                    }
-                                    output_lines.push("data: [DONE]\n\n".to_string());
-                                    continue;
-                                }
-
-                                // Try to parse as JSON and extract the text delta.
-                                if let Ok(mut json) = serde_json::from_str::<Value>(trimmed) {
-                                    let delta_text = extract_sse_delta(&json, sse_format);
-
-                                    if let Some(token) = delta_text {
+                        for event in &complete_events {
+                            for line in event.split('\n') {
+                                if let Some(data) = line.strip_prefix("data: ") {
+                                    let trimmed = data.trim();
+                                    if trimmed == "[DONE]" {
                                         let mut guard = deano.lock().await;
-                                        let deanonymized_chunks =
-                                            guard.process_token(&token);
-                                        let deanonymized =
-                                            deanonymized_chunks.join("");
+                                        if let Some(remaining) = guard.flush() {
+                                            let synth = build_sse_delta(
+                                                &remaining,
+                                                sse_format,
+                                            );
+                                            output_lines.push(format!("data: {synth}\n\n"));
+                                        }
+                                        output_lines.push("data: [DONE]\n\n".to_string());
+                                        continue;
+                                    }
 
-                                        // Update the JSON with deanonymized text.
-                                        set_sse_delta(
-                                            &mut json,
-                                            &deanonymized,
-                                            sse_format,
-                                        );
-                                        let json_str = serde_json::to_string(&json)
-                                            .unwrap_or_else(|_| trimmed.to_string());
-                                        output_lines.push(format!("data: {json_str}\n\n"));
+                                    if let Ok(mut json) = serde_json::from_str::<Value>(trimmed) {
+                                        let delta_text = extract_sse_delta(&json, sse_format);
+
+                                        if let Some(token) = delta_text {
+                                            let mut guard = deano.lock().await;
+                                            let deanonymized_chunks =
+                                                guard.process_token(&token);
+                                            let deanonymized =
+                                                deanonymized_chunks.join("");
+
+                                            set_sse_delta(
+                                                &mut json,
+                                                &deanonymized,
+                                                sse_format,
+                                            );
+                                            let json_str = serde_json::to_string(&json)
+                                                .unwrap_or_else(|_| trimmed.to_string());
+                                            output_lines.push(format!("data: {json_str}\n\n"));
+                                        } else {
+                                            output_lines.push(format!("data: {trimmed}\n\n"));
+                                        }
                                     } else {
-                                        // Non-text delta event (e.g. start/stop).
                                         output_lines.push(format!("data: {trimmed}\n\n"));
                                     }
-                                } else {
-                                    // Not valid JSON — pass through.
-                                    output_lines.push(format!("data: {trimmed}\n\n"));
+                                } else if !line.is_empty() {
+                                    output_lines.push(format!("{line}\n"));
                                 }
-                            } else if !line.is_empty() {
-                                // Non-data SSE lines (e.g. event:, id:).
-                                output_lines.push(format!("{line}\n"));
                             }
                         }
 

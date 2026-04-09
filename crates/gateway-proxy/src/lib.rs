@@ -1,5 +1,6 @@
 pub mod format;
 pub mod handler;
+pub mod sse_buffer;
 pub mod metrics;
 pub mod privacy_api;
 pub mod routing;
