@@ -23,6 +23,8 @@ pub struct GatewayConfig {
     pub escalation_confidence_threshold: f64,
     pub escalation_min_prompt_tokens: usize,
     pub rules_path: Option<String>,
+    pub routing_config_path: Option<String>,
+    pub streaming_enabled: bool,
 }
 
 impl GatewayConfig {
@@ -63,6 +65,10 @@ impl GatewayConfig {
             escalation_confidence_threshold: 0.7,
             escalation_min_prompt_tokens: 200,
             rules_path: env::var("GATEWAY_RULES_PATH").ok(),
+            routing_config_path: env::var("GATEWAY_ROUTING_CONFIG").ok(),
+            streaming_enabled: env_or("GATEWAY_STREAMING", "true")
+                .parse()
+                .unwrap_or(true),
         })
     }
 }
@@ -129,6 +135,7 @@ mod tests {
         assert_eq!(config.fast_model, "MTBS/anonymizer");
         assert_eq!(config.scan_mode, ScanMode::Fast);
         assert!(config.show_score);
+        assert!(config.streaming_enabled);
         env::remove_var("ANTHROPIC_API_KEY");
     }
 }

@@ -7,6 +7,7 @@ use gateway_anonymizer::regex_detector::RegexDetector;
 use gateway_anonymizer::session::SessionStore;
 use gateway_common::config::GatewayConfig;
 use gateway_proxy::metrics;
+use gateway_proxy::routing::Router as SmartRouter;
 use gateway_proxy::state::AppState;
 use tracing::info;
 
@@ -43,6 +44,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build()
         .map_err(|e| format!("failed to build HTTP client: {e}"))?;
 
+    // Load smart routing config (optional).
+    let router = match &config.routing_config_path {
+        Some(path) => SmartRouter::load_or_default(path),
+        None => SmartRouter::default_router(),
+    };
+    if router.has_routes() {
+        info!("smart model routing enabled");
+    }
+
     let listen_addr = config.listen_addr.clone();
 
     let app_state = AppState {
@@ -50,6 +60,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         detector: Arc::new(detector),
         session_store: Arc::new(session_store),
         http_client,
+        router,
     };
 
     // Build the router -- privacy API and /metrics are dedicated routes;

@@ -31,7 +31,9 @@ uuid.workspace = true
 async-trait.workspace = true
 metrics.workspace = true
 metrics-exporter-prometheus.workspace = true
+serde_yaml.workspace = true
 bytes = "1"
+futures-util = "0.3"
 
 [dev-dependencies]
 assert_matches.workspace = true

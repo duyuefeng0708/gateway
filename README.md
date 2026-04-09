@@ -29,6 +29,14 @@ A Rust reverse proxy that anonymizes PII in LLM API requests using tiered local 
 
 ## Quick Start
 
+**One-line install** (downloads binary, starts Ollama, pulls PII model):
+
+```bash
+curl -sSf https://gateway.dev/install | sh
+```
+
+Or run manually with Docker Compose:
+
 ```bash
 # Set your API key
 export ANTHROPIC_API_KEY=sk-...

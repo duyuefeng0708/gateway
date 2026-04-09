@@ -40,6 +40,8 @@ async fn test_state(upstream_url: &str) -> gateway_proxy::AppState {
         escalation_confidence_threshold: 0.7,
         escalation_min_prompt_tokens: 200,
         rules_path: None,
+        routing_config_path: None,
+        streaming_enabled: false,
     };
 
     gateway_proxy::AppState {
@@ -47,6 +49,7 @@ async fn test_state(upstream_url: &str) -> gateway_proxy::AppState {
         detector: Arc::new(detector),
         session_store: Arc::new(session_store),
         http_client,
+        router: gateway_proxy::Router::default_router(),
     }
 }
 

@@ -6,4 +6,5 @@ pub mod placeholder;
 pub mod regex_detector;
 pub mod rules;
 pub mod session;
+pub mod streaming;
 pub mod tiered;

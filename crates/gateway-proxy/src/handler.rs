@@ -1,14 +1,18 @@
+use std::sync::Arc;
 use std::time::Instant;
 
 use axum::body::Bytes;
 use axum::extract::State;
 use axum::http::{HeaderMap, HeaderValue, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
+use futures_util::StreamExt;
 use gateway_anonymizer::placeholder;
+use gateway_anonymizer::streaming::StreamingDeanonymizer;
 use gateway_common::errors::GatewayError;
 use gateway_common::types::PrivacyScore;
 use serde_json::Value;
-use tracing::debug;
+use tokio::sync::Mutex;
+use tracing::{debug, warn};
 
 use crate::format::{self, ApiFormat};
 use crate::metrics;
@@ -226,15 +230,42 @@ async fn handle_inner(
     let new_body_bytes = serde_json::to_vec(&new_body)
         .map_err(|e| GatewayError::Internal(format!("JSON serialization failed: {e}")))?;
 
-    // 8. Forward to upstream.
-    let upstream_url = match api_format {
-        ApiFormat::OpenAi => format!(
-            "{}/v1/chat/completions",
-            state.config.upstream_url_openai.trim_end_matches('/')
-        ),
-        ApiFormat::Anthropic => state.config.upstream_url.clone(),
+    // 8. Forward to upstream — use smart routing if configured.
+    let route_target = state.router.select(privacy_score.value());
+
+    let (upstream_url, effective_format, api_key_env) = if let Some(ref target) = route_target {
+        // Smart routing: use the route target's upstream and credentials.
+        let url = match target.api_format {
+            ApiFormat::OpenAi => format!(
+                "{}/v1/chat/completions",
+                target.upstream_url.trim_end_matches('/')
+            ),
+            ApiFormat::Anthropic => target.upstream_url.clone(),
+        };
+        debug!(
+            upstream = %url,
+            route = %target.route_name,
+            format = ?target.api_format,
+            score = privacy_score.value(),
+            "smart routing request"
+        );
+        (url, target.api_format, target.api_key_env.clone())
+    } else {
+        // Default behavior: use config upstream based on request format.
+        let url = match api_format {
+            ApiFormat::OpenAi => format!(
+                "{}/v1/chat/completions",
+                state.config.upstream_url_openai.trim_end_matches('/')
+            ),
+            ApiFormat::Anthropic => state.config.upstream_url.clone(),
+        };
+        let key_env = match api_format {
+            ApiFormat::OpenAi => "OPENAI_API_KEY".to_string(),
+            ApiFormat::Anthropic => "ANTHROPIC_API_KEY".to_string(),
+        };
+        debug!(upstream = %url, format = ?api_format, "forwarding request (default)");
+        (url, api_format, key_env)
     };
-    debug!(upstream = %upstream_url, format = ?api_format, "forwarding request");
 
     let mut req_builder = state.http_client.post(&upstream_url);
 
@@ -251,22 +282,26 @@ async fn handle_inner(
         req_builder = req_builder.header(name, value);
     }
 
-    // Add authorization header appropriate for the API format.
-    match api_format {
+    // Add authorization header appropriate for the effective API format.
+    match effective_format {
         ApiFormat::OpenAi => {
-            if let Ok(api_key) = std::env::var("OPENAI_API_KEY") {
+            if let Ok(api_key) = std::env::var(&api_key_env) {
                 req_builder =
                     req_builder.header("authorization", format!("Bearer {api_key}"));
             }
         }
         ApiFormat::Anthropic => {
-            if let Ok(api_key) = std::env::var("ANTHROPIC_API_KEY") {
+            if let Ok(api_key) = std::env::var(&api_key_env) {
                 req_builder = req_builder.header("x-api-key", api_key);
             }
         }
     }
     req_builder = req_builder.header("content-type", "application/json");
     req_builder = req_builder.body(new_body_bytes);
+
+    // Detect whether the client requested streaming.
+    let is_streaming = new_body.get("stream").and_then(Value::as_bool).unwrap_or(false)
+        && state.config.streaming_enabled;
 
     let upstream_start = Instant::now();
 
@@ -278,56 +313,258 @@ async fn handle_inner(
         }
     })?;
 
-    // 9. Buffer full response.
     let upstream_status = upstream_resp.status();
     let upstream_headers = upstream_resp.headers().clone();
-    let upstream_body_bytes = upstream_resp.bytes().await.map_err(|e| {
-        GatewayError::UpstreamUnavailable(format!("failed to read upstream body: {e}"))
-    })?;
 
-    // Record upstream round-trip duration.
-    metrics::record_upstream_duration(upstream_start);
+    if is_streaming {
+        // ---------------------------------------------------------------
+        // Streaming path: deanonymize SSE chunks in real time
+        // ---------------------------------------------------------------
 
-    // 10. Deanonymize response body.
-    let response_text = String::from_utf8_lossy(&upstream_body_bytes);
-    let all_placeholders = state
-        .session_store
-        .lookup_all(&session_id)
-        .await
-        .map_err(GatewayError::SessionStore)?;
-    let deanonymized = placeholder::restore(&response_text, &all_placeholders);
+        // Load all placeholders for this session up-front.
+        let all_placeholders = state
+            .session_store
+            .lookup_all(&session_id)
+            .await
+            .map_err(GatewayError::SessionStore)?;
 
-    // 11. Build final response.
-    let mut builder = Response::builder().status(upstream_status.as_u16());
+        let deanonymizer = Arc::new(Mutex::new(
+            StreamingDeanonymizer::new(all_placeholders),
+        ));
 
-    // Copy upstream response headers.
-    for (name, value) in upstream_headers.iter() {
-        let name_str = name.as_str().to_lowercase();
-        if matches!(
-            name_str.as_str(),
-            "transfer-encoding" | "content-length" | "connection"
-        ) {
-            continue;
+        let byte_stream = upstream_resp.bytes_stream();
+
+        // State captured by the stream closure.
+        let deanonymizer_clone = Arc::clone(&deanonymizer);
+        let sse_format = effective_format;
+
+        let body_stream = byte_stream.then(move |chunk_result| {
+            let deano = Arc::clone(&deanonymizer_clone);
+            async move {
+                match chunk_result {
+                    Ok(chunk) => {
+                        let text = String::from_utf8_lossy(&chunk);
+                        let mut output_lines = Vec::new();
+
+                        for line in text.split('\n') {
+                            if let Some(data) = line.strip_prefix("data: ") {
+                                let trimmed = data.trim();
+                                if trimmed == "[DONE]" {
+                                    // Flush remaining buffer at stream end.
+                                    let mut guard = deano.lock().await;
+                                    if let Some(remaining) = guard.flush() {
+                                        // Emit the flushed text as a synthetic delta.
+                                        let synth = build_sse_delta(
+                                            &remaining,
+                                            sse_format,
+                                        );
+                                        output_lines.push(format!("data: {synth}\n\n"));
+                                    }
+                                    output_lines.push("data: [DONE]\n\n".to_string());
+                                    continue;
+                                }
+
+                                // Try to parse as JSON and extract the text delta.
+                                if let Ok(mut json) = serde_json::from_str::<Value>(trimmed) {
+                                    let delta_text = extract_sse_delta(&json, sse_format);
+
+                                    if let Some(token) = delta_text {
+                                        let mut guard = deano.lock().await;
+                                        let deanonymized_chunks =
+                                            guard.process_token(&token);
+                                        let deanonymized =
+                                            deanonymized_chunks.join("");
+
+                                        // Update the JSON with deanonymized text.
+                                        set_sse_delta(
+                                            &mut json,
+                                            &deanonymized,
+                                            sse_format,
+                                        );
+                                        let json_str = serde_json::to_string(&json)
+                                            .unwrap_or_else(|_| trimmed.to_string());
+                                        output_lines.push(format!("data: {json_str}\n\n"));
+                                    } else {
+                                        // Non-text delta event (e.g. start/stop).
+                                        output_lines.push(format!("data: {trimmed}\n\n"));
+                                    }
+                                } else {
+                                    // Not valid JSON — pass through.
+                                    output_lines.push(format!("data: {trimmed}\n\n"));
+                                }
+                            } else if !line.is_empty() {
+                                // Non-data SSE lines (e.g. event:, id:).
+                                output_lines.push(format!("{line}\n"));
+                            }
+                        }
+
+                        Ok::<_, std::io::Error>(Bytes::from(output_lines.join("")))
+                    }
+                    Err(e) => {
+                        warn!("upstream stream error: {e}");
+                        Err(std::io::Error::new(
+                            std::io::ErrorKind::BrokenPipe,
+                            e.to_string(),
+                        ))
+                    }
+                }
+            }
+        });
+
+        // Build streaming response.
+        let stream_body = axum::body::Body::from_stream(body_stream);
+
+        let mut builder = Response::builder().status(upstream_status.as_u16());
+
+        // Copy upstream response headers.
+        for (name, value) in upstream_headers.iter() {
+            let name_str = name.as_str().to_lowercase();
+            if matches!(
+                name_str.as_str(),
+                "transfer-encoding" | "content-length" | "connection"
+            ) {
+                continue;
+            }
+            builder = builder.header(name, value);
         }
-        builder = builder.header(name, value);
+
+        builder = builder.header("content-type", "text/event-stream");
+        builder = builder.header("cache-control", "no-cache");
+        builder = builder.header("x-gateway-session", &session_id);
+        builder = builder.header(
+            "x-gateway-privacy-score",
+            format_privacy_header(&privacy_score),
+        );
+
+        let response = builder
+            .body(stream_body)
+            .map_err(|e| GatewayError::Internal(format!("response build failed: {e}")))?;
+
+        // Record metrics (upstream duration is approximate for streaming).
+        metrics::record_upstream_duration(upstream_start);
+        metrics::record_request_duration(request_start);
+        metrics::record_request_total(upstream_status.as_u16());
+
+        Ok(response)
+    } else {
+        // ---------------------------------------------------------------
+        // Buffered path: existing behavior (backward compatible)
+        // ---------------------------------------------------------------
+
+        // 9. Buffer full response.
+        let upstream_body_bytes = upstream_resp.bytes().await.map_err(|e| {
+            GatewayError::UpstreamUnavailable(format!("failed to read upstream body: {e}"))
+        })?;
+
+        // Record upstream round-trip duration.
+        metrics::record_upstream_duration(upstream_start);
+
+        // 10. Deanonymize response body.
+        let response_text = String::from_utf8_lossy(&upstream_body_bytes);
+        let all_placeholders = state
+            .session_store
+            .lookup_all(&session_id)
+            .await
+            .map_err(GatewayError::SessionStore)?;
+        let deanonymized = placeholder::restore(&response_text, &all_placeholders);
+
+        // 11. Build final response.
+        let mut builder = Response::builder().status(upstream_status.as_u16());
+
+        // Copy upstream response headers.
+        for (name, value) in upstream_headers.iter() {
+            let name_str = name.as_str().to_lowercase();
+            if matches!(
+                name_str.as_str(),
+                "transfer-encoding" | "content-length" | "connection"
+            ) {
+                continue;
+            }
+            builder = builder.header(name, value);
+        }
+
+        // Add gateway headers.
+        builder = builder.header("x-gateway-session", &session_id);
+        builder = builder.header(
+            "x-gateway-privacy-score",
+            format_privacy_header(&privacy_score),
+        );
+
+        let response = builder
+            .body(axum::body::Body::from(deanonymized.into_bytes()))
+            .map_err(|e| GatewayError::Internal(format!("response build failed: {e}")))?;
+
+        // Record total request duration and success status.
+        metrics::record_request_duration(request_start);
+        metrics::record_request_total(upstream_status.as_u16());
+
+        Ok(response)
     }
+}
 
-    // Add gateway headers.
-    builder = builder.header("x-gateway-session", &session_id);
-    builder = builder.header(
-        "x-gateway-privacy-score",
-        format_privacy_header(&privacy_score),
-    );
+// ---------------------------------------------------------------------------
+// SSE delta extraction and rebuilding helpers
+// ---------------------------------------------------------------------------
 
-    let response = builder
-        .body(axum::body::Body::from(deanonymized.into_bytes()))
-        .map_err(|e| GatewayError::Internal(format!("response build failed: {e}")))?;
+/// Extract the text delta from a parsed SSE JSON event.
+///
+/// - Anthropic: `{"delta":{"type":"text_delta","text":"token"}}`
+/// - OpenAI: `{"choices":[{"delta":{"content":"token"}}]}`
+fn extract_sse_delta(json: &Value, format: ApiFormat) -> Option<String> {
+    match format {
+        ApiFormat::Anthropic => json
+            .get("delta")
+            .and_then(|d| d.get("text"))
+            .and_then(Value::as_str)
+            .map(String::from),
+        ApiFormat::OpenAi => json
+            .get("choices")
+            .and_then(Value::as_array)
+            .and_then(|arr| arr.first())
+            .and_then(|c| c.get("delta"))
+            .and_then(|d| d.get("content"))
+            .and_then(Value::as_str)
+            .map(String::from),
+    }
+}
 
-    // Record total request duration and success status.
-    metrics::record_request_duration(request_start);
-    metrics::record_request_total(upstream_status.as_u16());
+/// Set the text delta in a parsed SSE JSON event.
+fn set_sse_delta(json: &mut Value, text: &str, format: ApiFormat) {
+    match format {
+        ApiFormat::Anthropic => {
+            if let Some(delta) = json.get_mut("delta") {
+                delta["text"] = Value::String(text.to_string());
+            }
+        }
+        ApiFormat::OpenAi => {
+            if let Some(choices) = json.get_mut("choices").and_then(Value::as_array_mut) {
+                if let Some(choice) = choices.first_mut() {
+                    if let Some(delta) = choice.get_mut("delta") {
+                        delta["content"] = Value::String(text.to_string());
+                    }
+                }
+            }
+        }
+    }
+}
 
-    Ok(response)
+/// Build a synthetic SSE data line with a text delta.
+fn build_sse_delta(text: &str, format: ApiFormat) -> String {
+    match format {
+        ApiFormat::Anthropic => {
+            let json = serde_json::json!({
+                "type": "content_block_delta",
+                "delta": {"type": "text_delta", "text": text}
+            });
+            serde_json::to_string(&json).unwrap_or_default()
+        }
+        ApiFormat::OpenAi => {
+            let json = serde_json::json!({
+                "choices": [{"delta": {"content": text}}]
+            });
+            serde_json::to_string(&json).unwrap_or_default()
+        }
+    }
 }
 
 #[cfg(test)]
