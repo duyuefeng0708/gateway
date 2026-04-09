@@ -7,6 +7,7 @@ use std::time::Duration;
 pub struct GatewayConfig {
     pub listen_addr: String,
     pub upstream_url: String,
+    pub upstream_url_openai: String,
     pub fast_model: String,
     pub deep_model: String,
     pub ollama_url: String,
@@ -21,6 +22,7 @@ pub struct GatewayConfig {
     pub model_timeout: Duration,
     pub escalation_confidence_threshold: f64,
     pub escalation_min_prompt_tokens: usize,
+    pub rules_path: Option<String>,
 }
 
 impl GatewayConfig {
@@ -35,6 +37,7 @@ impl GatewayConfig {
         Ok(Self {
             listen_addr: env_or("GATEWAY_LISTEN", "127.0.0.1:8443"),
             upstream_url: env_or("GATEWAY_UPSTREAM", "https://api.anthropic.com"),
+            upstream_url_openai: env_or("GATEWAY_UPSTREAM_OPENAI", "https://api.openai.com"),
             fast_model: env_or("GATEWAY_FAST_MODEL", "MTBS/anonymizer"),
             deep_model: env_or(
                 "GATEWAY_DEEP_MODEL",
@@ -59,6 +62,7 @@ impl GatewayConfig {
             model_timeout: Duration::from_secs(8),
             escalation_confidence_threshold: 0.7,
             escalation_min_prompt_tokens: 200,
+            rules_path: env::var("GATEWAY_RULES_PATH").ok(),
         })
     }
 }
@@ -121,6 +125,7 @@ mod tests {
         let config = GatewayConfig::from_env().unwrap();
         assert_eq!(config.listen_addr, "127.0.0.1:8443");
         assert_eq!(config.upstream_url, "https://api.anthropic.com");
+        assert_eq!(config.upstream_url_openai, "https://api.openai.com");
         assert_eq!(config.fast_model, "MTBS/anonymizer");
         assert_eq!(config.scan_mode, ScanMode::Fast);
         assert!(config.show_score);

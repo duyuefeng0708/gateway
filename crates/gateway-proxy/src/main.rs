@@ -1,9 +1,12 @@
 use std::sync::Arc;
+use std::time::Duration;
 
+use axum::routing::{get, post};
 use axum::Router;
 use gateway_anonymizer::regex_detector::RegexDetector;
 use gateway_anonymizer::session::SessionStore;
 use gateway_common::config::GatewayConfig;
+use gateway_proxy::metrics;
 use gateway_proxy::state::AppState;
 use tracing::info;
 
@@ -17,6 +20,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .init();
 
+    // Initialize Prometheus metrics recorder.
+    metrics::init_metrics()
+        .map_err(|e| format!("metrics initialization failed: {e}"))?;
+
     // Parse configuration from environment.
     let config = GatewayConfig::from_env()
         .map_err(|e| format!("configuration error: {e}"))?;
@@ -28,9 +35,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize the PII detector (regex for now; TieredDetector in Unit 6).
     let detector = RegexDetector::new();
 
-    // Build the HTTP client for upstream forwarding.
+    // Build the HTTP client for upstream forwarding with connection pooling.
     let http_client = reqwest::Client::builder()
         .timeout(config.model_timeout)
+        .pool_max_idle_per_host(32)
+        .pool_idle_timeout(Duration::from_secs(90))
         .build()
         .map_err(|e| format!("failed to build HTTP client: {e}"))?;
 
@@ -43,8 +52,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         http_client,
     };
 
-    // Build the router -- all methods on all paths go to the proxy handler.
+    // Build the router -- privacy API and /metrics are dedicated routes;
+    // everything else falls through to the proxy handler.
     let app = Router::new()
+        .route("/v1/anonymize", post(gateway_proxy::anonymize))
+        .route("/v1/deanonymize", post(gateway_proxy::deanonymize))
+        .route("/metrics", get(metrics::metrics_handler))
         .fallback(gateway_proxy::handle_proxy_request)
         .with_state(app_state);
 

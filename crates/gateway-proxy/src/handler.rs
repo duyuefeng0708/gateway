@@ -1,6 +1,8 @@
+use std::time::Instant;
+
 use axum::body::Bytes;
 use axum::extract::State;
-use axum::http::{HeaderMap, HeaderValue, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use gateway_anonymizer::placeholder;
 use gateway_common::errors::GatewayError;
@@ -8,6 +10,8 @@ use gateway_common::types::PrivacyScore;
 use serde_json::Value;
 use tracing::debug;
 
+use crate::format::{self, ApiFormat};
+use crate::metrics;
 use crate::state::AppState;
 
 // ---------------------------------------------------------------------------
@@ -72,46 +76,6 @@ fn restore_code_blocks(text: &str, blocks: &[CodeBlock]) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// JSON helpers
-// ---------------------------------------------------------------------------
-
-/// Extract the concatenated content strings from an Anthropic-format messages
-/// body. Returns the text together with a list of (json_path_index, content)
-/// for later reconstruction.
-fn extract_message_contents(body: &Value) -> Result<Vec<(usize, String)>, GatewayError> {
-    let messages = body
-        .get("messages")
-        .and_then(Value::as_array)
-        .ok_or_else(|| GatewayError::BadRequest("missing or invalid 'messages' array".into()))?;
-
-    let mut contents = Vec::new();
-    for (idx, msg) in messages.iter().enumerate() {
-        if let Some(content) = msg.get("content").and_then(Value::as_str) {
-            contents.push((idx, content.to_string()));
-        }
-    }
-    Ok(contents)
-}
-
-/// Rebuild the JSON body with anonymized content strings.
-fn rebuild_body(
-    mut body: Value,
-    anonymized: &[(usize, String)],
-) -> Result<Value, GatewayError> {
-    let messages = body
-        .get_mut("messages")
-        .and_then(Value::as_array_mut)
-        .ok_or_else(|| GatewayError::Internal("messages array disappeared".into()))?;
-
-    for (idx, new_content) in anonymized {
-        if let Some(msg) = messages.get_mut(*idx) {
-            msg["content"] = Value::String(new_content.clone());
-        }
-    }
-    Ok(body)
-}
-
-// ---------------------------------------------------------------------------
 // Privacy score header formatting
 // ---------------------------------------------------------------------------
 
@@ -123,8 +87,25 @@ fn format_privacy_header(score: &PrivacyScore) -> String {
 // Error → Response conversion
 // ---------------------------------------------------------------------------
 
+fn error_kind(err: &GatewayError) -> &'static str {
+    match err {
+        GatewayError::BadRequest(_) => "bad_request",
+        GatewayError::PayloadTooLarge => "payload_too_large",
+        GatewayError::UnsupportedMediaType => "unsupported_media_type",
+        GatewayError::ModelUnavailable(_) => "model_unavailable",
+        GatewayError::SessionStore(_) => "session_store",
+        GatewayError::AuditTrail(_) => "audit_trail",
+        GatewayError::UpstreamUnavailable(_) => "upstream_unavailable",
+        GatewayError::UpstreamError { .. } => "upstream_error",
+        GatewayError::UpstreamTimeout => "upstream_timeout",
+        GatewayError::Internal(_) => "internal",
+    }
+}
+
 fn error_response(err: GatewayError) -> Response {
     let status = err.status_code();
+    metrics::record_error(error_kind(&err));
+    metrics::record_request_total(status);
     let body = serde_json::json!({ "error": err.to_string() });
     let mut resp = (
         StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
@@ -145,17 +126,26 @@ fn error_response(err: GatewayError) -> Response {
 
 pub async fn handle_proxy_request(
     State(state): State<AppState>,
+    uri: Uri,
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, Response> {
-    handle_inner(state, headers, body).await.map_err(error_response)
+    handle_inner(state, uri, headers, body)
+        .await
+        .map_err(error_response)
 }
 
 async fn handle_inner(
     state: AppState,
+    uri: Uri,
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, GatewayError> {
+    let request_start = Instant::now();
+
+    // 0. Detect API format from the request path.
+    let api_format = format::detect_format(uri.path());
+
     // 1. Parse JSON body.
     if body.is_empty() {
         return Err(GatewayError::BadRequest("empty body".into()));
@@ -164,7 +154,7 @@ async fn handle_inner(
         .map_err(|e| GatewayError::BadRequest(format!("invalid JSON: {e}")))?;
 
     // 2. Extract content strings from messages.
-    let contents = extract_message_contents(&parsed_body)?;
+    let contents = format::extract_messages(&parsed_body, api_format)?;
 
     // 3-5. Detect PII, substitute, and store session data.
     let session_id = headers
@@ -175,6 +165,8 @@ async fn handle_inner(
 
     let mut all_spans = Vec::new();
     let mut anonymized_contents: Vec<(usize, String)> = Vec::new();
+
+    let inference_start = Instant::now();
 
     for (idx, content) in &contents {
         // 2a. Extract code blocks before PII detection.
@@ -210,19 +202,41 @@ async fn handle_inner(
         anonymized_contents.push((*idx, final_text));
     }
 
+    // Record model inference duration.
+    metrics::record_model_inference_duration(inference_start);
+
+    // Record PII detection counts by type.
+    {
+        use std::collections::HashMap;
+        let mut counts: HashMap<&str, u64> = HashMap::new();
+        for span in &all_spans {
+            *counts.entry(span.pii_type.placeholder_prefix()).or_insert(0) += 1;
+        }
+        for (pii_type, count) in counts {
+            metrics::record_pii_detected(pii_type, count);
+        }
+    }
+
     // 6. Compute privacy score.
     let privacy_score = PrivacyScore::compute(&all_spans);
 
     // 7. Rebuild the JSON body.
-    let new_body = rebuild_body(parsed_body, &anonymized_contents)?;
+    let mut new_body = parsed_body;
+    format::rebuild_body(&mut new_body, &anonymized_contents, api_format)?;
     let new_body_bytes = serde_json::to_vec(&new_body)
         .map_err(|e| GatewayError::Internal(format!("JSON serialization failed: {e}")))?;
 
     // 8. Forward to upstream.
-    let upstream_url = &state.config.upstream_url;
-    debug!(upstream = %upstream_url, "forwarding request");
+    let upstream_url = match api_format {
+        ApiFormat::OpenAi => format!(
+            "{}/v1/chat/completions",
+            state.config.upstream_url_openai.trim_end_matches('/')
+        ),
+        ApiFormat::Anthropic => state.config.upstream_url.clone(),
+    };
+    debug!(upstream = %upstream_url, format = ?api_format, "forwarding request");
 
-    let mut req_builder = state.http_client.post(upstream_url);
+    let mut req_builder = state.http_client.post(&upstream_url);
 
     // Copy original headers, skipping hop-by-hop and host.
     for (name, value) in headers.iter() {
@@ -237,12 +251,24 @@ async fn handle_inner(
         req_builder = req_builder.header(name, value);
     }
 
-    // Add authorization from env if present.
-    if let Ok(api_key) = std::env::var("ANTHROPIC_API_KEY") {
-        req_builder = req_builder.header("x-api-key", api_key);
+    // Add authorization header appropriate for the API format.
+    match api_format {
+        ApiFormat::OpenAi => {
+            if let Ok(api_key) = std::env::var("OPENAI_API_KEY") {
+                req_builder =
+                    req_builder.header("authorization", format!("Bearer {api_key}"));
+            }
+        }
+        ApiFormat::Anthropic => {
+            if let Ok(api_key) = std::env::var("ANTHROPIC_API_KEY") {
+                req_builder = req_builder.header("x-api-key", api_key);
+            }
+        }
     }
     req_builder = req_builder.header("content-type", "application/json");
     req_builder = req_builder.body(new_body_bytes);
+
+    let upstream_start = Instant::now();
 
     let upstream_resp = req_builder.send().await.map_err(|e| {
         if e.is_timeout() {
@@ -258,6 +284,9 @@ async fn handle_inner(
     let upstream_body_bytes = upstream_resp.bytes().await.map_err(|e| {
         GatewayError::UpstreamUnavailable(format!("failed to read upstream body: {e}"))
     })?;
+
+    // Record upstream round-trip duration.
+    metrics::record_upstream_duration(upstream_start);
 
     // 10. Deanonymize response body.
     let response_text = String::from_utf8_lossy(&upstream_body_bytes);
@@ -293,6 +322,10 @@ async fn handle_inner(
     let response = builder
         .body(axum::body::Body::from(deanonymized.into_bytes()))
         .map_err(|e| GatewayError::Internal(format!("response build failed: {e}")))?;
+
+    // Record total request duration and success status.
+    metrics::record_request_duration(request_start);
+    metrics::record_request_total(upstream_status.as_u16());
 
     Ok(response)
 }

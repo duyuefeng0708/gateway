@@ -29,6 +29,8 @@ hyper.workspace = true
 chrono.workspace = true
 uuid.workspace = true
 async-trait.workspace = true
+metrics.workspace = true
+metrics-exporter-prometheus.workspace = true
 bytes = "1"
 
 [dev-dependencies]

@@ -23,6 +23,7 @@ pub struct TieredDetector {
     regex: Box<dyn PiiDetector>,
     fast: Box<dyn PiiDetector>,
     deep: Option<Box<dyn PiiDetector>>,
+    rules: Option<Box<dyn PiiDetector>>,
     mode: ScanMode,
     confidence_threshold: f64,
     min_prompt_tokens: usize,
@@ -40,10 +41,17 @@ impl TieredDetector {
             regex,
             fast,
             deep,
+            rules: None,
             mode,
             confidence_threshold: 0.7,
             min_prompt_tokens: 200,
         }
+    }
+
+    /// Attach an optional custom-rules detector (runs alongside the regex pre-scan).
+    pub fn with_rules(mut self, rules: Box<dyn PiiDetector>) -> Self {
+        self.rules = Some(rules);
+        self
     }
 
     /// Override the default confidence threshold (0.7) for auto-mode escalation.
@@ -142,12 +150,23 @@ impl TieredDetector {
         }
     }
 
-    /// Run the regex + fast model tier and collect all spans.
+    /// Run the regex + rules + fast model tier and collect all spans.
     async fn run_fast_tier(&self, text: &str) -> Result<Vec<PiiSpan>, DetectionError> {
         let regex_spans = self.regex.detect(text).await?;
         let fast_spans = self.fast.detect(text).await?;
         let mut all = regex_spans;
         all.extend(fast_spans);
+
+        // Custom YAML rules run alongside the regex pre-scan (both are fast).
+        if let Some(rules) = &self.rules {
+            match rules.detect(text).await {
+                Ok(rule_spans) => all.extend(rule_spans),
+                Err(e) => {
+                    tracing::warn!(error = %e, "custom rules detector failed, continuing without");
+                }
+            }
+        }
+
         Ok(all)
     }
 

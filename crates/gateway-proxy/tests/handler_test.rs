@@ -23,6 +23,7 @@ async fn test_state(upstream_url: &str) -> gateway_proxy::AppState {
     let config = GatewayConfig {
         listen_addr: "127.0.0.1:0".to_string(),
         upstream_url: upstream_url.to_string(),
+        upstream_url_openai: upstream_url.to_string(),
         fast_model: "test".to_string(),
         deep_model: "test".to_string(),
         ollama_url: "http://localhost:11434".to_string(),
@@ -37,6 +38,7 @@ async fn test_state(upstream_url: &str) -> gateway_proxy::AppState {
         model_timeout: std::time::Duration::from_secs(5),
         escalation_confidence_threshold: 0.7,
         escalation_min_prompt_tokens: 200,
+        rules_path: None,
     };
 
     gateway_proxy::AppState {

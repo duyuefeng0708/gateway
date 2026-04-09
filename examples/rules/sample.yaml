@@ -1,0 +1,36 @@
+# Sample custom PII rules for domain-specific detection.
+#
+# Each rule has:
+#   name       - human-readable label (for logging/debugging)
+#   type       - PII category: PERSON, ORGANIZATION, LOCATION, EMAIL, PHONE, SSN, CREDENTIAL
+#   patterns   - list of regex patterns (optional)
+#   keywords   - list of literal strings for case-sensitive substring match (optional)
+#   confidence - detection confidence 0.0-1.0 (default 0.8)
+
+rules:
+  - name: "project-codenames"
+    type: "ORGANIZATION"
+    patterns:
+      - "Project\\s+Phoenix"
+      - "Project\\s+Titan"
+    confidence: 0.9
+
+  - name: "client-names"
+    type: "PERSON"
+    keywords:
+      - "Dr. Martinez"
+      - "Jane Doe"
+    confidence: 0.95
+
+  - name: "internal-endpoints"
+    type: "CREDENTIAL"
+    patterns:
+      - "https?://internal\\.[a-z]+\\.corp\\.example\\.com[^\\s]*"
+    confidence: 0.85
+
+  - name: "office-locations"
+    type: "LOCATION"
+    keywords:
+      - "Building 42, Floor 3"
+      - "Campus North"
+    confidence: 0.7
