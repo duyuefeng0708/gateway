@@ -41,7 +41,9 @@ endpoints:
     assert_eq!(config.endpoints[0].port, 443); // default port
     assert_eq!(config.proxy_port, 8443); // default proxy port
     assert_eq!(config.dns_refresh_interval, 60); // default refresh
-    assert_eq!(config.cgroup_path, "/sys/fs/cgroup"); // default cgroup
+    // Default cgroup is now auto-detected (user slice on systemd, or /sys/fs/cgroup fallback).
+    // Just verify it's a non-empty path that starts with /sys/fs/cgroup.
+    assert!(config.cgroup_path.starts_with("/sys/fs/cgroup"), "cgroup_path should start with /sys/fs/cgroup, got: {}", config.cgroup_path);
 }
 
 #[test]

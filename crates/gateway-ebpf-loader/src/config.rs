@@ -44,6 +44,30 @@ fn default_dns_refresh_interval() -> u64 {
 }
 
 fn default_cgroup_path() -> String {
+    // On systemd-based systems (cgroup v2), each user session gets its own
+    // cgroup slice. Attaching to root "/sys/fs/cgroup" doesn't reliably
+    // cover all sessions. Default to the current user's slice which covers
+    // all sessions for this uid.
+    if let Ok(uid) = std::env::var("SUDO_UID").or_else(|_| std::env::var("UID")) {
+        let user_slice = format!("/sys/fs/cgroup/user.slice/user-{uid}.slice");
+        if std::path::Path::new(&user_slice).exists() {
+            return user_slice;
+        }
+    }
+    // Try to detect from /proc/self/cgroup and go up to the user slice
+    if let Ok(cgroup) = std::fs::read_to_string("/proc/self/cgroup") {
+        if let Some(path) = cgroup.lines().next() {
+            let cg_path = path.split("::").nth(1).unwrap_or("");
+            // Walk up to user-XXXX.slice level
+            if let Some(idx) = cg_path.find(".slice/") {
+                let slice = &cg_path[..idx + 6]; // include ".slice"
+                let full = format!("/sys/fs/cgroup{slice}");
+                if std::path::Path::new(&full).exists() {
+                    return full;
+                }
+            }
+        }
+    }
     "/sys/fs/cgroup".to_string()
 }
 

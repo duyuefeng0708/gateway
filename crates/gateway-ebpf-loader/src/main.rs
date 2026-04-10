@@ -394,7 +394,7 @@ fn load_ebpf(cli: &Cli, config: &LoaderConfig, resolved: &ResolvedEndpoints) -> 
         .context("program is not a CgroupSockAddr type")?;
 
     prog.load().context("failed to load connect4 program")?;
-    prog.attach(&cgroup_fd, CgroupAttachMode::Single)
+    prog.attach(&cgroup_fd, CgroupAttachMode::AllowMultiple)
         .context("failed to attach connect4 program to cgroup")?;
 
     info!(cgroup = %config.cgroup_path, "attached connect4_redirect to cgroup");
@@ -411,7 +411,7 @@ fn load_ebpf(cli: &Cli, config: &LoaderConfig, resolved: &ResolvedEndpoints) -> 
                     .context("connect6 program is not a CgroupSockAddr type")?;
                 prog6.load().context("failed to load connect6 program")?;
                 prog6
-                    .attach(&cgroup_fd, CgroupAttachMode::Single)
+                    .attach(&cgroup_fd, CgroupAttachMode::AllowMultiple)
                     .context("failed to attach connect6 program to cgroup")?;
                 info!(cgroup = %config.cgroup_path, "attached connect6_redirect to cgroup");
                 Ok(())
