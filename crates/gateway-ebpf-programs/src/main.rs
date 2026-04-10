@@ -83,13 +83,14 @@ pub fn connect4_redirect(ctx: SockAddrContext) -> i32 {
 }
 
 fn try_connect4_redirect(ctx: &SockAddrContext) -> Result<i32, i64> {
-    // user_ip4: network byte order u32
+    // user_ip4: raw u32 as stored by the kernel (network byte order bytes
+    // read as a native-endian u32). We use this value AS-IS for map lookups.
     let dst_ip = unsafe { (*ctx.sock_addr).user_ip4 };
 
-    // user_port: network byte order u32. The port is stored in the upper 16
-    // bits when read as a host-endian u32 on little-endian systems.
+    // user_port: __be16 stored in a __u32. On x86 (LE), htons(port) sits
+    // in the lower 16 bits of the u32. Extract it directly.
     let dst_port_raw = unsafe { (*ctx.sock_addr).user_port };
-    let dst_port_ne = (dst_port_raw >> 16) as u16;
+    let dst_port_ne = dst_port_raw as u16;
 
     // Build the lookup key. Both IP and port are in network byte order.
     let key = EndpointKey {
@@ -119,11 +120,11 @@ fn try_connect4_redirect(ctx: &SockAddrContext) -> Result<i32, i64> {
 
         // Redirect to 127.0.0.1:proxy_port
         unsafe {
-            // 127.0.0.1 in network byte order
-            (*ctx.sock_addr).user_ip4 = 0x7F000001_u32.to_be();
-            // Port in the u32 network-order format
-            let port_be = proxy_port.to_be();
-            (*ctx.sock_addr).user_port = (port_be as u32) << 16;
+            // 127.0.0.1: raw bytes [127,0,0,1] as native-endian u32
+            (*ctx.sock_addr).user_ip4 = u32::from_ne_bytes([127, 0, 0, 1]);
+            // Port as __be16 in lower 16 bits of u32 (htons)
+            let port_ne = proxy_port.to_be();
+            (*ctx.sock_addr).user_port = port_ne as u32;
         }
     }
 

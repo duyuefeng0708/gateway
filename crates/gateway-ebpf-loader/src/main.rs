@@ -89,7 +89,7 @@ async fn main() -> Result<()> {
         "resolved endpoint IPs"
     );
     for ep in &resolved.v4 {
-        let octets = ep.ip_be.to_be_bytes();
+        let octets = ep.ip_be.to_ne_bytes();
         info!(
             ip = format!("{}.{}.{}.{}", octets[0], octets[1], octets[2], octets[3]),
             port = ep.port,
@@ -223,7 +223,7 @@ fn print_dry_run_summary(config: &LoaderConfig, resolved: &ResolvedEndpoints) {
     println!("Resolved IPv6: {}", resolved.v6.len());
     println!();
     for ep in &resolved.v4 {
-        let octets = ep.ip_be.to_be_bytes();
+        let octets = ep.ip_be.to_ne_bytes();
         println!(
             "  {}.{}.{}.{}:{}",
             octets[0], octets[1], octets[2], octets[3], ep.port

@@ -99,7 +99,11 @@ async fn resolve_host(host: &str, port: u16) -> std::io::Result<ResolvedEndpoint
             match addr {
                 std::net::SocketAddr::V4(v4) => {
                     let octets = v4.ip().octets();
-                    let ip_be = u32::from_be_bytes(octets);
+                    // Use from_ne_bytes so the u32 matches what the kernel's
+                    // user_ip4 field looks like when read on this CPU. On x86
+                    // (LE), from_ne_bytes([160,79,104,10]) = 0x0A684FA0, which
+                    // is exactly what user_ip4 contains for 160.79.104.10.
+                    let ip_be = u32::from_ne_bytes(octets);
                     resolved.v4.push(ResolvedEndpoint {
                         ip_be,
                         port: v4.port(),
@@ -152,9 +156,9 @@ mod tests {
         assert!(!resolved.is_empty(), "localhost should resolve");
 
         // localhost should resolve to 127.0.0.1
-        let loopback_be = u32::from_be_bytes([127, 0, 0, 1]);
+        let loopback_ne = u32::from_ne_bytes([127, 0, 0, 1]);
         assert!(
-            resolved.v4.iter().any(|r| r.ip_be == loopback_be),
+            resolved.v4.iter().any(|r| r.ip_be == loopback_ne),
             "localhost should resolve to 127.0.0.1"
         );
         assert!(
