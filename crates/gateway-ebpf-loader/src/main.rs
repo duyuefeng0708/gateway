@@ -399,17 +399,26 @@ fn load_ebpf(cli: &Cli, config: &LoaderConfig, resolved: &ResolvedEndpoints) -> 
 
     info!(cgroup = %config.cgroup_path, "attached connect4_redirect to cgroup");
 
-    // Attach the connect6 program to the cgroup (best-effort).
+    // Attach the connect6 program to the cgroup (best-effort, non-fatal).
+    // The BPF verifier on some kernels rejects direct user_ip6 access in
+    // cgroup/connect6 programs. If connect6 fails to load, IPv4 interception
+    // still works — only IPv6 connections bypass the redirect.
     match bpf.program_mut("connect6_redirect") {
         Some(prog6_any) => {
-            let prog6: &mut CgroupSockAddr = prog6_any
-                .try_into()
-                .context("connect6 program is not a CgroupSockAddr type")?;
-            prog6.load().context("failed to load connect6 program")?;
-            prog6
-                .attach(&cgroup_fd, CgroupAttachMode::Single)
-                .context("failed to attach connect6 program to cgroup")?;
-            info!(cgroup = %config.cgroup_path, "attached connect6_redirect to cgroup");
+            let result: Result<()> = (|| {
+                let prog6: &mut CgroupSockAddr = prog6_any
+                    .try_into()
+                    .context("connect6 program is not a CgroupSockAddr type")?;
+                prog6.load().context("failed to load connect6 program")?;
+                prog6
+                    .attach(&cgroup_fd, CgroupAttachMode::Single)
+                    .context("failed to attach connect6 program to cgroup")?;
+                info!(cgroup = %config.cgroup_path, "attached connect6_redirect to cgroup");
+                Ok(())
+            })();
+            if let Err(e) = result {
+                warn!("connect6 failed to load (non-fatal, IPv4 still active): {e:#}");
+            }
         }
         None => {
             warn!("connect6_redirect program not found in eBPF object, IPv6 interception disabled");
