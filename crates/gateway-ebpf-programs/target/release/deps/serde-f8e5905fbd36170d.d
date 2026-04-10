@@ -1,0 +1,14 @@
+/home/louis/projects/gateway/crates/gateway-ebpf-programs/target/release/deps/serde-f8e5905fbd36170d.d: /home/louis/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /home/louis/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /home/louis/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /home/louis/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /home/louis/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /home/louis/projects/gateway/crates/gateway-ebpf-programs/target/release/build/serde-d604867bae0989c4/out/private.rs
+
+/home/louis/projects/gateway/crates/gateway-ebpf-programs/target/release/deps/libserde-f8e5905fbd36170d.rlib: /home/louis/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /home/louis/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /home/louis/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /home/louis/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /home/louis/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /home/louis/projects/gateway/crates/gateway-ebpf-programs/target/release/build/serde-d604867bae0989c4/out/private.rs
+
+/home/louis/projects/gateway/crates/gateway-ebpf-programs/target/release/deps/libserde-f8e5905fbd36170d.rmeta: /home/louis/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /home/louis/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /home/louis/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /home/louis/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /home/louis/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /home/louis/projects/gateway/crates/gateway-ebpf-programs/target/release/build/serde-d604867bae0989c4/out/private.rs
+
+/home/louis/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs:
+/home/louis/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs:
+/home/louis/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs:
+/home/louis/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs:
+/home/louis/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs:
+/home/louis/projects/gateway/crates/gateway-ebpf-programs/target/release/build/serde-d604867bae0989c4/out/private.rs:
+
+# env-dep:OUT_DIR=/home/louis/projects/gateway/crates/gateway-ebpf-programs/target/release/build/serde-d604867bae0989c4/out

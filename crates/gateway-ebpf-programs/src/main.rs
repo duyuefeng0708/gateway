@@ -2,46 +2,44 @@
 #![no_main]
 
 use aya_ebpf::{
-    bindings::bpf_sock_addr,
     macros::{cgroup_sock_addr, map},
     maps::{Array, HashMap},
     programs::SockAddrContext,
+    helpers::bpf_get_socket_cookie,
 };
-use aya_log_ebpf::info;
 
-// KNOWN ISSUES (require kernel testing to validate fixes):
+// Shared key struct for endpoint map. Must match the loader's EndpointKey
+// exactly: #[repr(C)], 8 bytes total (4-byte IP + 2-byte port + 2-byte pad).
 //
-// 1. ORIG_DST key uses `protocol` field (always 6 for TCP), not a per-socket
-//    identifier. Concurrent connections overwrite each other's original destination.
-//    Fix: use bpf_get_socket_cookie() or a (src_ip, src_port) composite key.
-//
-// 2. Map key is a bare tuple `(u32, u16)` whose layout may not match the
-//    `#[repr(C)]` EndpointKey struct in the loader. Fix: define a shared
-//    `#[repr(C)]` key struct in a common no_std crate used by both.
-//
-// 3. Byte-order handling on `user_port`: the kernel stores it in network byte
-//    order as a u32. Casting to u16 then calling .to_be() double-converts on
-//    little-endian. Fix: read the raw u32, mask to get the port, and use
-//    consistent byte-order handling between eBPF and loader.
-//
-// 4. No IPv6 support (connect6). IPv6 connections to LLM endpoints bypass the
-//    redirect entirely.
-//
-// These issues are architectural, not design-level. The redirect pattern
-// (cgroup/connect4 + endpoint map + orig_dst tracking) is correct. The
-// implementation details need validation on a real Linux 5.15+ kernel.
+// IP and port are in network byte order (big-endian).
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct EndpointKey {
+    ip: u32,
+    port: u16,
+    _pad: u16,
+}
+
+// Shared value struct for original destination tracking.
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct OrigDst {
+    ip: u32,
+    port: u16,
+    _pad: u16,
+}
 
 /// Map of LLM endpoint IPs to redirect.
-/// Key: (u32 ip, u16 port), Value: u8 (1 = redirect)
+/// Key: EndpointKey (ip + port, network byte order), Value: u8 (1 = redirect)
 #[map]
-static ENDPOINTS: HashMap<(u32, u16), u8> = HashMap::with_max_entries(256, 0);
+static ENDPOINTS: HashMap<EndpointKey, u8> = HashMap::with_max_entries(256, 0);
 
 /// Stores original destination before redirect.
-/// Key: u64 (socket cookie), Value: (u32 ip, u16 port)
+/// Key: u64 (socket cookie, unique per socket), Value: OrigDst
 #[map]
-static ORIG_DST: HashMap<u64, (u32, u16)> = HashMap::with_max_entries(65536, 0);
+static ORIG_DST: HashMap<u64, OrigDst> = HashMap::with_max_entries(65536, 0);
 
-/// Single-element array holding the proxy port.
+/// Single-element array holding the proxy port in host byte order.
 #[map]
 static PROXY_PORT: Array<u16> = Array::with_max_entries(1, 0);
 
@@ -49,41 +47,56 @@ static PROXY_PORT: Array<u16> = Array::with_max_entries(1, 0);
 pub fn connect4_redirect(ctx: SockAddrContext) -> i32 {
     match try_connect4_redirect(&ctx) {
         Ok(ret) => ret,
-        Err(_) => 1, // Allow connection on error
+        Err(_) => 1, // Allow connection on error (fail-open for network stability)
     }
 }
 
 fn try_connect4_redirect(ctx: &SockAddrContext) -> Result<i32, i64> {
+    // user_ip4: network byte order u32
     let dst_ip = unsafe { (*ctx.sock_addr).user_ip4 };
-    let dst_port = unsafe { (*ctx.sock_addr).user_port as u16 };
+
+    // user_port: network byte order u32. The port is stored in the upper 16
+    // bits when read as a host-endian u32 on little-endian systems.
+    let dst_port_raw = unsafe { (*ctx.sock_addr).user_port };
+    let dst_port_ne = (dst_port_raw >> 16) as u16;
+
+    // Build the lookup key. Both IP and port are in network byte order.
+    let key = EndpointKey {
+        ip: dst_ip,
+        port: dst_port_ne,
+        _pad: 0,
+    };
 
     // Check if this destination is in our endpoint map.
-    let key = (dst_ip, dst_port.to_be());
     if unsafe { ENDPOINTS.get(&key) }.is_some() {
-        // Get the proxy port.
-        let proxy_port = match unsafe { PROXY_PORT.get(0) } {
+        // Get the proxy port (stored in host byte order by the loader).
+        let proxy_port = match PROXY_PORT.get(0) {
             Some(p) => *p,
-            None => return Ok(1), // No proxy port configured, allow.
+            None => return Ok(1),
         };
 
-        // Store original destination for the proxy to retrieve.
-        let cookie = unsafe { (*ctx.sock_addr).__bindgen_anon_1.__bindgen_anon_1.protocol };
-        // Note: getting socket cookie in cgroup/connect4 requires kernel support.
-        // Using a simpler key based on source port as fallback.
-        unsafe {
-            ORIG_DST.insert(&(cookie as u64), &(dst_ip, dst_port), 0)?;
-        }
+        // Get unique socket cookie for per-connection ORIG_DST key.
+        let cookie = unsafe { bpf_get_socket_cookie(ctx.sock_addr as *mut _) };
 
-        // Redirect to localhost:proxy_port.
-        unsafe {
-            (*ctx.sock_addr).user_ip4 = u32::from_be_bytes([127, 0, 0, 1]).to_be();
-            (*ctx.sock_addr).user_port = (proxy_port as u32).to_be() as u32;
-        }
+        // Store original destination for the proxy to retrieve later.
+        let orig = OrigDst {
+            ip: dst_ip,
+            port: dst_port_ne,
+            _pad: 0,
+        };
+        ORIG_DST.insert(&cookie, &orig, 0)?;
 
-        info!(ctx, "redirected connection to proxy");
+        // Redirect to 127.0.0.1:proxy_port
+        unsafe {
+            // 127.0.0.1 in network byte order
+            (*ctx.sock_addr).user_ip4 = 0x7F000001_u32.to_be();
+            // Port in the u32 network-order format
+            let port_be = proxy_port.to_be();
+            (*ctx.sock_addr).user_port = (port_be as u32) << 16;
+        }
     }
 
-    Ok(1) // Allow (1 = allow in cgroup/connect4)
+    Ok(1) // 1 = allow in cgroup/connect4
 }
 
 #[panic_handler]

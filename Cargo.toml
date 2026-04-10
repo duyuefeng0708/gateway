@@ -6,6 +6,9 @@ members = [
     "crates/gateway-cli",
     "crates/gateway-ebpf-loader",
 ]
+exclude = [
+    "crates/gateway-ebpf-programs",
+]
 resolver = "2"
 
 [workspace.package]
