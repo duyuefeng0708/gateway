@@ -9,6 +9,28 @@ use aya_ebpf::{
 };
 use aya_log_ebpf::info;
 
+// KNOWN ISSUES (require kernel testing to validate fixes):
+//
+// 1. ORIG_DST key uses `protocol` field (always 6 for TCP), not a per-socket
+//    identifier. Concurrent connections overwrite each other's original destination.
+//    Fix: use bpf_get_socket_cookie() or a (src_ip, src_port) composite key.
+//
+// 2. Map key is a bare tuple `(u32, u16)` whose layout may not match the
+//    `#[repr(C)]` EndpointKey struct in the loader. Fix: define a shared
+//    `#[repr(C)]` key struct in a common no_std crate used by both.
+//
+// 3. Byte-order handling on `user_port`: the kernel stores it in network byte
+//    order as a u32. Casting to u16 then calling .to_be() double-converts on
+//    little-endian. Fix: read the raw u32, mask to get the port, and use
+//    consistent byte-order handling between eBPF and loader.
+//
+// 4. No IPv6 support (connect6). IPv6 connections to LLM endpoints bypass the
+//    redirect entirely.
+//
+// These issues are architectural, not design-level. The redirect pattern
+// (cgroup/connect4 + endpoint map + orig_dst tracking) is correct. The
+// implementation details need validation on a real Linux 5.15+ kernel.
+
 /// Map of LLM endpoint IPs to redirect.
 /// Key: (u32 ip, u16 port), Value: u8 (1 = redirect)
 #[map]
