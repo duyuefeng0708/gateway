@@ -105,15 +105,15 @@ endpoints:
     );
 }
 
-#[test]
-fn dns_resolution_for_localhost_works() {
+#[tokio::test]
+async fn dns_resolution_for_localhost_works() {
     // This test verifies that the DNS module can resolve localhost.
     // We test it through the public interface.
     let endpoints = vec![gateway_ebpf_loader::Endpoint {
         host: "localhost".to_string(),
         port: 80,
     }];
-    let resolved = gateway_ebpf_loader::resolve_endpoints(&endpoints);
+    let resolved = gateway_ebpf_loader::resolve_endpoints(&endpoints).await;
     assert!(
         !resolved.is_empty(),
         "localhost should resolve to at least one address"

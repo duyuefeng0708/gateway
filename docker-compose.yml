@@ -28,7 +28,6 @@ services:
     build:
       context: .
       dockerfile: crates/gateway-ebpf-loader/Dockerfile
-    privileged: true
     pid: host
     network_mode: host
     cap_add:

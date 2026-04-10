@@ -8,4 +8,4 @@ pub mod dns;
 
 // Re-export key types at the crate root for convenience.
 pub use config::{Endpoint, LoaderConfig};
-pub use dns::{resolve_endpoints, ResolvedEndpoint};
+pub use dns::{resolve_endpoints, ResolvedEndpoint, ResolvedEndpoint6, ResolvedEndpoints};
