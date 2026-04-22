@@ -40,3 +40,4 @@ assert_matches.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 wiremock = "0.6"
 temp-env = "0.3"
+ollama-rs.workspace = true

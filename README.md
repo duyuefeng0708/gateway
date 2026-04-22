@@ -24,8 +24,8 @@ A Rust reverse proxy that anonymizes PII in LLM API requests using tiered local 
 
 **Detection tiers:**
 - **Regex** -- emails, SSNs, phone numbers, API keys (sub-millisecond)
-- **4B fast model** -- explicit PII via MTBS/anonymizer on Ollama (sub-second)
-- **27B deep model** -- implicit PII via Qwen 3.5 reasoning (2-8s, auto-escalation)
+- **4B fast model** -- explicit PII via `gemma4:e4b` on Ollama (sub-second)
+- **27B deep model** -- implicit PII via `gemma4:26b` reasoning (opt-in, see [Scan modes](#scan-modes))
 
 ## Quick Start
 
@@ -35,13 +35,16 @@ A Rust reverse proxy that anonymizes PII in LLM API requests using tiered local 
 curl -sSf https://gateway.dev/install | sh
 ```
 
+The installer pulls only the 4B fast model (`gemma4:e4b`) by default. To also pull the 18GB deep model for implicit-PII coverage, pass `--with-deep` (or set `GATEWAY_INSTALL_DEEP=1`). Most laptop users should stick with the default -- see [Laptop vs GPU](#laptop-vs-gpu).
+
 Or run manually with Docker Compose:
 
 ```bash
 # Set your API key
 export ANTHROPIC_API_KEY=sk-...
 
-# Start the gateway + Ollama sidecar
+# Start the gateway + Ollama sidecar. Defaults to scan_mode=fast:
+# regex + gemma4:e4b only, ~3s per request, implicit PII is NOT caught.
 docker compose up
 
 # Send a request through the proxy
@@ -50,6 +53,43 @@ curl -X POST http://localhost:8443/v1/messages \
   -H "x-api-key: $ANTHROPIC_API_KEY" \
   -d '{"model":"claude-sonnet-4-20250514","max_tokens":256,"messages":[{"role":"user","content":"My name is Alice and I live in Portland."}]}'
 ```
+
+## Scan modes
+
+Tiered detection is controlled by `GATEWAY_SCAN_MODE`:
+
+| Mode | Pipeline | Latency (laptop CPU) | Latency (H100) | When to use |
+|---|---|---|---|---|
+| `fast` *(default)* | regex + `gemma4:e4b` | ~3s/request | ~3s/request | Interactive use; misses implicit PII |
+| `auto` | regex + `gemma4:e4b`, escalates to `gemma4:26b` on uncertainty | ~86s/request when escalated | ~17s/request when escalated | Best accuracy/latency tradeoff on GPU |
+| `deep` | regex + `gemma4:26b` on every request | ~86s/request | ~17s/request | Maximum recall; GPU only |
+
+Silent fallback is the accepted posture: if the deep tier fails or times out, the gateway emits a metric and returns fast-tier spans instead of erroring. Raise `GATEWAY_DETECTION_TIMEOUT` (default 8s) if you want deep results to actually land on a laptop.
+
+## Laptop vs GPU
+
+On a laptop with no GPU, **keep `GATEWAY_SCAN_MODE=fast`** (the default). The deep tier's 27B model runs at CPU speed and will not return before `GATEWAY_DETECTION_TIMEOUT` (8s) expires -- detections will silently fall back to fast-only spans.
+
+To experiment with implicit PII detection on a laptop:
+
+```bash
+export GATEWAY_SCAN_MODE=auto
+export GATEWAY_DETECTION_TIMEOUT=120
+```
+
+Expect **~86s per message** with the deep tier actually firing. This is not for interactive use; it is only for one-off evaluation. On an H100 the same pipeline lands at ~17s per message, which matches the marketing claims.
+
+## Observability and alerts
+
+The proxy exposes Prometheus metrics for tiered-detection behaviour. The one you must alert on is the silent-fallback signal:
+
+```
+gateway_deep_tier_attempted_total - gateway_deep_tier_succeeded_total
+```
+
+If this value is growing, deep-tier detections are failing (timeout, model not loaded, Ollama unreachable) and the gateway is silently falling back to fast-only spans. Implicit PII is being missed. Common causes: the 18GB deep model wasn't pulled (`install.sh` without `--with-deep`), `GATEWAY_DETECTION_TIMEOUT` is too low for the hardware, or Ollama is under load.
+
+Run `gateway doctor` to verify that the configured models are actually loaded in Ollama -- when `scan_mode` is `auto` or `deep`, the deep-model check is included; in `fast` mode it is skipped.
 
 To run with cc-gateway as the upstream instead of Anthropic directly:
 
@@ -66,16 +106,22 @@ All settings are configured via environment variables.
 | `GATEWAY_LISTEN` | `127.0.0.1:8443` | Listen address |
 | `GATEWAY_UPSTREAM` | `https://api.anthropic.com` | Upstream LLM API URL |
 | `GATEWAY_OLLAMA_URL` | `http://localhost:11434` | Ollama API endpoint |
-| `GATEWAY_FAST_MODEL` | `MTBS/anonymizer` | 4B fast PII detection model |
-| `GATEWAY_DEEP_MODEL` | `qwen3.5-27b-claude-distilled` | 27B deep PII detection model |
-| `GATEWAY_SCAN_MODE` | `fast` | Detection mode: `fast`, `deep`, or `auto` |
+| `GATEWAY_FAST_MODEL` | `gemma4:e4b` | 4B fast PII detection model (Ollama tag) |
+| `GATEWAY_DEEP_MODEL` | `gemma4:26b` | 27B deep PII detection model (Ollama tag) |
+| `GATEWAY_SCAN_MODE` | `fast` | Detection mode: `fast`, `deep`, or `auto` (see [Scan modes](#scan-modes)) |
+| `GATEWAY_DETECTION_TIMEOUT` | `8` | Per-request PII detection budget, seconds. Raise to ~120 for laptop deep mode. |
+| `GATEWAY_UPSTREAM_TIMEOUT` | `60` | Upstream HTTP client timeout, seconds |
+| `GATEWAY_DETECTION_CONCURRENCY` | `2` | Max concurrent in-flight detections per request |
 | `GATEWAY_DB_PATH` | `./data/sessions.db` | SQLite database path |
 | `GATEWAY_SESSION_TTL` | `24h` | Session mapping time-to-live |
 | `GATEWAY_AUDIT_PATH` | `./data/audit/` | Audit log directory |
 | `GATEWAY_AUDIT_RETENTION` | `30` | Audit log retention in days |
 | `GATEWAY_LOG_LEVEL` | `info` | Log level (trace, debug, info, warn, error) |
 | `GATEWAY_SHOW_SCORE` | `true` | Include privacy score in response headers |
-| `ANTHROPIC_API_KEY` | *(required)* | Anthropic API key for upstream |
+| `ANTHROPIC_API_KEY` | *(required\*)* | Anthropic API key for upstream |
+| `OPENAI_API_KEY` | *(required\*)* | OpenAI API key for upstream |
+
+\* At least one of `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` must be set.
 
 ## Development
 

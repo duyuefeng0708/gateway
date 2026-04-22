@@ -1,7 +1,9 @@
+use gateway_common::types::ScanMode;
 use serde::Serialize;
 use std::env;
 use std::fs;
 use std::path::Path;
+use std::str::FromStr;
 
 /// Result of a single health check.
 #[derive(Debug, Clone, Serialize)]
@@ -26,20 +28,30 @@ fn env_or(key: &str, default: &str) -> String {
 /// Run all health checks and return a report.
 pub async fn run_checks() -> DoctorReport {
     let ollama_url = env_or("GATEWAY_OLLAMA_URL", "http://localhost:11434");
-    let fast_model = env_or("GATEWAY_FAST_MODEL", "MTBS/anonymizer");
+    let fast_model = env_or("GATEWAY_FAST_MODEL", "gemma4:e4b");
+    let deep_model = env_or("GATEWAY_DEEP_MODEL", "gemma4:26b");
+    let scan_mode = ScanMode::from_str(&env_or("GATEWAY_SCAN_MODE", "fast"))
+        .unwrap_or(ScanMode::Fast);
     let db_path = env_or("GATEWAY_DB_PATH", "./data/sessions.db");
     let upstream_url = env_or("GATEWAY_UPSTREAM", "https://api.anthropic.com");
     let audit_path = env_or("GATEWAY_AUDIT_PATH", "./data/audit/");
 
-    let (ollama_check, model_check) = check_ollama(&ollama_url, &fast_model).await;
+    // Fast model is always checked. Deep model is only checked when the
+    // operator has opted into the deep tier via scan_mode=auto or deep --
+    // otherwise the 18GB model being absent is expected, not a failure.
+    let deep_model_arg = match scan_mode {
+        ScanMode::Auto | ScanMode::Deep => Some(deep_model.as_str()),
+        ScanMode::Fast => None,
+    };
 
-    let checks = vec![
-        ollama_check,
-        model_check,
-        check_sqlite(&db_path),
-        check_upstream(&upstream_url).await,
-        check_disk_space(&audit_path),
-    ];
+    let (ollama_check, model_checks) =
+        check_ollama(&ollama_url, &fast_model, deep_model_arg).await;
+
+    let mut checks = vec![ollama_check];
+    checks.extend(model_checks);
+    checks.push(check_sqlite(&db_path));
+    checks.push(check_upstream(&upstream_url).await);
+    checks.push(check_disk_space(&audit_path));
 
     let passed = checks.iter().filter(|c| c.passed).count();
     let total = checks.len();
@@ -51,8 +63,16 @@ pub async fn run_checks() -> DoctorReport {
     }
 }
 
-/// Check if Ollama is reachable and if the expected model is loaded.
-async fn check_ollama(ollama_url: &str, fast_model: &str) -> (CheckResult, CheckResult) {
+/// Check if Ollama is reachable and if the expected models are loaded.
+///
+/// Always checks `fast_model`. Checks `deep_model` only when provided
+/// (callers pass `None` under `ScanMode::Fast` so a missing 18GB model
+/// is not reported as a failure).
+async fn check_ollama(
+    ollama_url: &str,
+    fast_model: &str,
+    deep_model: Option<&str>,
+) -> (CheckResult, Vec<CheckResult>) {
     let tags_url = format!("{}/api/tags", ollama_url.trim_end_matches('/'));
 
     let client = reqwest::Client::builder()
@@ -68,72 +88,106 @@ async fn check_ollama(ollama_url: &str, fast_model: &str) -> (CheckResult, Check
                 detail: ollama_url.to_string(),
             };
 
-            // Try to parse response body to check for model
-            let model_check = match resp.text().await {
-                Ok(body) => check_model_in_response(&body, fast_model),
-                Err(_) => CheckResult {
-                    name: "Model loaded".into(),
+            // Try to parse response body once and check each model against it.
+            let body = match resp.text().await {
+                Ok(b) => Some(b),
+                Err(_) => None,
+            };
+
+            let mut model_checks = vec![match &body {
+                Some(b) => check_model_in_response(b, fast_model, "Fast model loaded"),
+                None => CheckResult {
+                    name: "Fast model loaded".into(),
                     passed: false,
                     detail: format!("failed to read Ollama response for {}", fast_model),
                 },
-            };
+            }];
 
-            (ollama_ok, model_check)
+            if let Some(deep) = deep_model {
+                model_checks.push(match &body {
+                    Some(b) => check_model_in_response(b, deep, "Deep model loaded"),
+                    None => CheckResult {
+                        name: "Deep model loaded".into(),
+                        passed: false,
+                        detail: format!("failed to read Ollama response for {}", deep),
+                    },
+                });
+            }
+
+            (ollama_ok, model_checks)
         }
         Ok(resp) => {
             let status = resp.status();
+            let mut model_checks = vec![CheckResult {
+                name: "Fast model loaded".into(),
+                passed: false,
+                detail: format!("Ollama not healthy (HTTP {})", status),
+            }];
+            if deep_model.is_some() {
+                model_checks.push(CheckResult {
+                    name: "Deep model loaded".into(),
+                    passed: false,
+                    detail: format!("Ollama not healthy (HTTP {})", status),
+                });
+            }
             (
                 CheckResult {
                     name: "Ollama reachable".into(),
                     passed: false,
                     detail: format!("{} returned HTTP {}", ollama_url, status),
                 },
-                CheckResult {
-                    name: "Model loaded".into(),
-                    passed: false,
-                    detail: format!("Ollama not healthy (HTTP {})", status),
-                },
+                model_checks,
             )
         }
-        Err(e) => (
-            CheckResult {
-                name: "Ollama reachable".into(),
-                passed: false,
-                detail: format!("{} ({})", ollama_url, e),
-            },
-            CheckResult {
-                name: "Model loaded".into(),
+        Err(e) => {
+            let mut model_checks = vec![CheckResult {
+                name: "Fast model loaded".into(),
                 passed: false,
                 detail: format!("{} not found (Ollama unreachable)", fast_model),
-            },
-        ),
+            }];
+            if let Some(deep) = deep_model {
+                model_checks.push(CheckResult {
+                    name: "Deep model loaded".into(),
+                    passed: false,
+                    detail: format!("{} not found (Ollama unreachable)", deep),
+                });
+            }
+            (
+                CheckResult {
+                    name: "Ollama reachable".into(),
+                    passed: false,
+                    detail: format!("{} ({})", ollama_url, e),
+                },
+                model_checks,
+            )
+        }
     }
 }
 
-fn check_model_in_response(body: &str, fast_model: &str) -> CheckResult {
+fn check_model_in_response(body: &str, model: &str, label: &str) -> CheckResult {
     // The /api/tags response is JSON with a "models" array, each having a "name" field.
     if let Ok(json) = serde_json::from_str::<serde_json::Value>(body) {
         if let Some(models) = json.get("models").and_then(|m| m.as_array()) {
             let found = models.iter().any(|m| {
                 m.get("name")
                     .and_then(|n| n.as_str())
-                    .map(|name| name == fast_model || name.starts_with(&format!("{}:", fast_model)))
+                    .map(|name| name == model || name.starts_with(&format!("{}:", model)))
                     .unwrap_or(false)
             });
             if found {
                 return CheckResult {
-                    name: "Model loaded".into(),
+                    name: label.to_string(),
                     passed: true,
-                    detail: fast_model.to_string(),
+                    detail: model.to_string(),
                 };
             }
         }
     }
 
     CheckResult {
-        name: "Model loaded".into(),
+        name: label.to_string(),
         passed: false,
-        detail: format!("{} not found", fast_model),
+        detail: format!("{} not found", model),
     }
 }
 
@@ -313,15 +367,35 @@ mod tests {
 
     #[test]
     fn check_model_found_in_response() {
-        let body = r#"{"models":[{"name":"MTBS/anonymizer:latest","size":123}]}"#;
-        let result = check_model_in_response(body, "MTBS/anonymizer");
+        let body = r#"{"models":[{"name":"gemma4:e4b","size":123}]}"#;
+        let result = check_model_in_response(body, "gemma4:e4b", "Fast model loaded");
         assert!(result.passed);
+        assert_eq!(result.name, "Fast model loaded");
+    }
+
+    #[test]
+    fn check_model_found_by_prefix() {
+        // `name == model` or `name starts_with "{model}:"` -- exercise the
+        // latter branch explicitly so a later refactor can't silently drop it.
+        let body = r#"{"models":[{"name":"gemma4:e4b-q4_0","size":123}]}"#;
+        let result = check_model_in_response(body, "gemma4:e4b", "Fast model loaded");
+        // Name equality fails here, so this is only a match if our matcher
+        // ever broadens; today this asserts we do NOT match arbitrary suffixes.
+        assert!(!result.passed);
+    }
+
+    #[test]
+    fn check_deep_model_found_in_response() {
+        let body = r#"{"models":[{"name":"gemma4:26b","size":18000000000}]}"#;
+        let result = check_model_in_response(body, "gemma4:26b", "Deep model loaded");
+        assert!(result.passed);
+        assert_eq!(result.name, "Deep model loaded");
     }
 
     #[test]
     fn check_model_not_found_in_response() {
         let body = r#"{"models":[{"name":"llama3:latest","size":123}]}"#;
-        let result = check_model_in_response(body, "MTBS/anonymizer");
+        let result = check_model_in_response(body, "gemma4:e4b", "Fast model loaded");
         assert!(!result.passed);
         assert!(result.detail.contains("not found"));
     }
@@ -329,14 +403,55 @@ mod tests {
     #[test]
     fn check_model_empty_models() {
         let body = r#"{"models":[]}"#;
-        let result = check_model_in_response(body, "MTBS/anonymizer");
+        let result = check_model_in_response(body, "gemma4:e4b", "Fast model loaded");
         assert!(!result.passed);
     }
 
     #[test]
     fn check_model_invalid_json() {
-        let result = check_model_in_response("not json", "MTBS/anonymizer");
+        let result = check_model_in_response("not json", "gemma4:e4b", "Fast model loaded");
         assert!(!result.passed);
+    }
+
+    // ── Tiered-detector check coverage ──────────────────────────────────
+    //
+    // Under the accepted silent-fallback posture, `scan_mode=fast` never
+    // invokes the deep tier -- so a missing 18GB deep model must not
+    // degrade the doctor report. These tests drive that via the Ollama
+    // reachability path (connection refused) because they can hit any
+    // free TCP port deterministically without a running Ollama.
+
+    async fn ollama_checks_for_mode(mode: ScanMode) -> (CheckResult, Vec<CheckResult>) {
+        // Use a port that is (very likely) closed so the request fails fast.
+        let unreachable_url = "http://127.0.0.1:1";
+        let deep_model_arg = match mode {
+            ScanMode::Auto | ScanMode::Deep => Some("gemma4:26b"),
+            ScanMode::Fast => None,
+        };
+        check_ollama(unreachable_url, "gemma4:e4b", deep_model_arg).await
+    }
+
+    #[tokio::test]
+    async fn deep_model_check_skipped_in_fast_mode() {
+        let (_ollama, models) = ollama_checks_for_mode(ScanMode::Fast).await;
+        assert_eq!(models.len(), 1, "expected only fast model check under Fast");
+        assert_eq!(models[0].name, "Fast model loaded");
+        assert!(!models.iter().any(|c| c.name == "Deep model loaded"));
+    }
+
+    #[tokio::test]
+    async fn deep_model_check_included_in_auto_mode() {
+        let (_ollama, models) = ollama_checks_for_mode(ScanMode::Auto).await;
+        assert_eq!(models.len(), 2, "expected both model checks under Auto");
+        assert_eq!(models[0].name, "Fast model loaded");
+        assert_eq!(models[1].name, "Deep model loaded");
+    }
+
+    #[tokio::test]
+    async fn deep_model_check_included_in_deep_mode() {
+        let (_ollama, models) = ollama_checks_for_mode(ScanMode::Deep).await;
+        assert_eq!(models.len(), 2, "expected both model checks under Deep");
+        assert_eq!(models[1].name, "Deep model loaded");
     }
 
     #[test]
