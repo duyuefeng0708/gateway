@@ -7,22 +7,79 @@ services:
       - GATEWAY_LISTEN=0.0.0.0:8443
       - GATEWAY_UPSTREAM=https://api.anthropic.com
       - GATEWAY_OLLAMA_URL=http://gateway-ollama:11434
+      - GATEWAY_SCAN_MODE=${GATEWAY_SCAN_MODE:-fast}
+      - GATEWAY_FAST_MODEL=${GATEWAY_FAST_MODEL:-gemma4:e4b}
+      - GATEWAY_DEEP_MODEL=${GATEWAY_DEEP_MODEL:-gemma4:26b}
+      - GATEWAY_DETECTION_TIMEOUT=${GATEWAY_DETECTION_TIMEOUT:-8}
+      - GATEWAY_UPSTREAM_TIMEOUT=${GATEWAY_UPSTREAM_TIMEOUT:-60}
+      - GATEWAY_DETECTION_CONCURRENCY=${GATEWAY_DETECTION_CONCURRENCY:-2}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
     volumes:
       - gateway-data:/app/data
+    # Gate readiness on /ready (flipped true by the proxy's warm-up probe).
+    # This is the honest signal: 200 means warm-up succeeded at least once.
+    # Deep-tier silent-fallback is still a runtime possibility — see the
+    # README Observability section for the ongoing alert signal.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8443/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 30s
     depends_on:
       gateway-ollama:
         condition: service_healthy
+      gateway-ollama-pull:
+        condition: service_completed_successfully
 
   gateway-ollama:
     image: ollama/ollama
+    # ollama/ollama ships without curl; use the ollama CLI which is on PATH.
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      test: ["CMD", "ollama", "list"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 20s
     volumes:
       - ollama-models:/root/.ollama
+
+  # One-shot container that pulls the gemma4 tags before the proxy boots.
+  # Without this, the proxy's warm-up probe races ollama's model load and
+  # usually loses — leaving the listener bound with warm=false until the
+  # model eventually loads on first real request. The pull can take a
+  # while (4 GB for e4b, 18 GB for 26b) so only deep gets pulled when
+  # the user explicitly opts in via scan_mode or GATEWAY_INSTALL_DEEP.
+  gateway-ollama-pull:
+    image: ollama/ollama
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        until ollama list >/dev/null 2>&1; do
+          echo "waiting for ollama server..."
+          sleep 2
+        done
+        echo "pulling fast model: $${GATEWAY_FAST_MODEL}"
+        ollama pull "$${GATEWAY_FAST_MODEL}"
+        if [ "$${GATEWAY_INSTALL_DEEP}" = "1" ] || \
+           [ "$${GATEWAY_SCAN_MODE}" = "auto" ] || \
+           [ "$${GATEWAY_SCAN_MODE}" = "deep" ]; then
+          echo "pulling deep model: $${GATEWAY_DEEP_MODEL}"
+          ollama pull "$${GATEWAY_DEEP_MODEL}"
+        else
+          echo "skipping deep model pull (scan_mode=fast and GATEWAY_INSTALL_DEEP not set)"
+        fi
+    environment:
+      - OLLAMA_HOST=gateway-ollama:11434
+      - GATEWAY_FAST_MODEL=${GATEWAY_FAST_MODEL:-gemma4:e4b}
+      - GATEWAY_DEEP_MODEL=${GATEWAY_DEEP_MODEL:-gemma4:26b}
+      - GATEWAY_SCAN_MODE=${GATEWAY_SCAN_MODE:-fast}
+      - GATEWAY_INSTALL_DEEP=${GATEWAY_INSTALL_DEEP:-0}
+    depends_on:
+      gateway-ollama:
+        condition: service_healthy
+    restart: "no"
 
   gateway-ebpf:
     build:
@@ -39,9 +96,12 @@ services:
       - /sys/fs/cgroup:/sys/fs/cgroup
       - ./endpoints.yaml:/etc/gateway/endpoints.yaml:ro
     command: ["gateway-ebpf-loader", "--config", "/etc/gateway/endpoints.yaml"]
+    # Wait for the proxy to be actually ready, not just started. The new
+    # /ready endpoint flips true once the warm-up probe succeeds so eBPF
+    # only starts redirecting traffic after the proxy can handle it.
     depends_on:
       gateway-proxy:
-        condition: service_started
+        condition: service_healthy
 
 volumes:
   gateway-data:
