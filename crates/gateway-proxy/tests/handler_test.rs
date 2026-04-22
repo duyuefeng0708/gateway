@@ -51,6 +51,8 @@ async fn test_state(upstream_url: &str) -> gateway_proxy::AppState {
         session_store: Arc::new(session_store),
         http_client,
         router: gateway_proxy::Router::default_router(),
+        warm: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+        detection_semaphore: Arc::new(tokio::sync::Semaphore::new(2)),
     }
 }
 

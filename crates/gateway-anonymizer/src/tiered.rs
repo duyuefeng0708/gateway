@@ -1,8 +1,13 @@
 use async_trait::async_trait;
+use gateway_common::config::GatewayConfig;
 use gateway_common::errors::DetectionError;
 use gateway_common::types::{PiiSpan, ScanMode};
+use ollama_rs::Ollama;
 
 use crate::detector::{DetectionResult, PiiDetector};
+use crate::ollama::OllamaDetector;
+use crate::regex_detector::RegexDetector;
+use crate::rules::RuleDetector;
 
 /// Composes regex, fast-model, and deep-model detectors with mode-based orchestration.
 ///
@@ -56,6 +61,75 @@ impl TieredDetector {
     pub fn with_min_prompt_tokens(mut self, tokens: usize) -> Self {
         self.min_prompt_tokens = tokens;
         self
+    }
+
+    /// Build a fully-wired TieredDetector from the gateway config. This is
+    /// the single construction point used by main.rs, integration tests, and
+    /// the CLI doctor so the wire-up logic is not duplicated.
+    ///
+    /// Behaviour by scan mode:
+    /// * `Fast`: deep detector is `None` (not constructed, no client created)
+    /// * `Auto` / `Deep`: deep detector is `Some(OllamaDetector(config.deep_model))`
+    ///
+    /// If `config.rules_path` is set, the YAML rules file is loaded and
+    /// attached via `with_rules`. A malformed rules file logs a warning and
+    /// the detector is built without rules — matches the existing
+    /// silent-fallback posture for the rules tier.
+    pub fn from_config(config: &GatewayConfig) -> Self {
+        let ollama_for = || {
+            // ollama-rs Ollama::new takes (host, port). Accept either
+            // http://host:port or http://host; default to 11434 if port is
+            // not specified. This parser is intentionally tiny — the URL
+            // comes from GATEWAY_OLLAMA_URL which operators control.
+            let raw = config.ollama_url.as_str();
+            let without_scheme = raw
+                .trim_start_matches("http://")
+                .trim_start_matches("https://");
+            let (host_part, port) = match without_scheme.split_once(':') {
+                Some((h, p)) => {
+                    let port = p.parse::<u16>().unwrap_or(11434);
+                    (h, port)
+                }
+                None => (without_scheme, 11434u16),
+            };
+            let scheme = if raw.starts_with("https://") {
+                "https"
+            } else {
+                "http"
+            };
+            Ollama::new(format!("{scheme}://{host_part}"), port)
+        };
+
+        let regex: Box<dyn PiiDetector> = Box::new(RegexDetector::new());
+        let fast: Box<dyn PiiDetector> = Box::new(
+            OllamaDetector::new(ollama_for(), config.fast_model.clone())
+                .with_timeout(config.detection_timeout),
+        );
+
+        let deep: Option<Box<dyn PiiDetector>> = match config.scan_mode {
+            ScanMode::Auto | ScanMode::Deep => Some(Box::new(
+                OllamaDetector::new(ollama_for(), config.deep_model.clone())
+                    .with_timeout(config.detection_timeout),
+            )),
+            ScanMode::Fast => None,
+        };
+
+        let mut tiered = Self::new(regex, fast, deep, config.scan_mode)
+            .with_confidence_threshold(config.escalation_confidence_threshold)
+            .with_min_prompt_tokens(config.escalation_min_prompt_tokens);
+
+        if let Some(path) = &config.rules_path {
+            match RuleDetector::from_file(path) {
+                Ok(rules) => tiered = tiered.with_rules(Box::new(rules)),
+                Err(e) => tracing::warn!(
+                    error = %e,
+                    path = %path,
+                    "failed to load rules YAML, continuing without custom rules"
+                ),
+            }
+        }
+
+        tiered
     }
 
     /// Run the regex + rules + fast model tier. Returns the spans plus

@@ -1,14 +1,14 @@
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::routing::{get, post};
-use axum::Router;
-use gateway_anonymizer::regex_detector::RegexDetector;
 use gateway_anonymizer::session::SessionStore;
+use gateway_anonymizer::tiered::TieredDetector;
 use gateway_common::config::GatewayConfig;
 use gateway_proxy::metrics;
 use gateway_proxy::routing::Router as SmartRouter;
 use gateway_proxy::state::AppState;
+use tokio::sync::Semaphore;
 use tracing::info;
 
 #[tokio::main]
@@ -30,11 +30,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|e| format!("configuration error: {e}"))?;
 
     // Initialize session store (SQLite).
-    let session_store = SessionStore::new(&config.db_path).await
+    let session_store = SessionStore::new(&config.db_path)
+        .await
         .map_err(|e| format!("session store initialization failed: {e}"))?;
 
-    // Initialize the PII detector (regex for now; TieredDetector in Unit 6).
-    let detector = RegexDetector::new();
+    // Build the tiered detector from config. Replaces the regex-only shim
+    // that shipped while the wire-up was deferred. With scan_mode=fast,
+    // the Ollama deep detector is not constructed; with auto/deep, an
+    // Ollama client points at the deep model.
+    let detector = TieredDetector::from_config(&config);
+    info!(
+        mode = ?config.scan_mode,
+        fast = %config.fast_model,
+        deep = %config.deep_model,
+        "tiered detector built"
+    );
 
     // Build the HTTP client for upstream forwarding with connection pooling.
     let http_client = reqwest::Client::builder()
@@ -44,7 +54,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build()
         .map_err(|e| format!("failed to build HTTP client: {e}"))?;
 
-    // Load smart routing config (optional).
+    // Load smart routing config (optional, dormant until multi-upstream used).
     let router = match &config.routing_config_path {
         Some(path) => SmartRouter::load_or_default(path),
         None => SmartRouter::default_router(),
@@ -54,6 +64,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let listen_addr = config.listen_addr.clone();
+    let detection_concurrency = config.detection_concurrency;
 
     let app_state = AppState {
         config,
@@ -61,18 +72,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         session_store: Arc::new(session_store),
         http_client,
         router,
+        warm: Arc::new(AtomicBool::new(false)),
+        detection_semaphore: Arc::new(Semaphore::new(detection_concurrency)),
     };
 
-    // Build the router -- privacy API and /metrics are dedicated routes;
-    // everything else falls through to the proxy handler.
-    let app = Router::new()
-        .route("/v1/anonymize", post(gateway_proxy::anonymize))
-        .route("/v1/deanonymize", post(gateway_proxy::deanonymize))
-        .route("/metrics", get(metrics::metrics_handler))
-        .fallback(gateway_proxy::handle_proxy_request)
-        .with_state(app_state);
+    let app = gateway_proxy::build_server(app_state.clone());
 
     info!("Gateway starting...");
+
+    // Warm-up probe runs before the listener binds. See gateway_proxy::warmup.
+    gateway_proxy::warmup::run_with_retry(&app_state).await;
 
     let listener = tokio::net::TcpListener::bind(&listen_addr).await?;
     info!(addr = %listen_addr, "listening");
