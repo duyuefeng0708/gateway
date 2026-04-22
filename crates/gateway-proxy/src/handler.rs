@@ -5,10 +5,12 @@ use axum::body::Bytes;
 use axum::extract::State;
 use axum::http::{HeaderMap, HeaderValue, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
+use futures_util::future::join_all;
 use futures_util::StreamExt;
+use gateway_anonymizer::detector::DetectionResult;
 use gateway_anonymizer::placeholder;
 use gateway_anonymizer::streaming::StreamingDeanonymizer;
-use gateway_common::errors::GatewayError;
+use gateway_common::errors::{DetectionError, GatewayError};
 use gateway_common::types::PrivacyScore;
 use serde_json::Value;
 use tokio::sync::Mutex;
@@ -17,6 +19,39 @@ use tracing::{debug, warn};
 use crate::format::{self, ApiFormat};
 use crate::metrics;
 use crate::state::AppState;
+
+/// Emit tier-visibility metrics from a DetectionResult. The tier label is
+/// derived purely from the DetectionResult flags, so the Prometheus label
+/// cardinality is bounded to {regex, fast, deep} — no user input ever
+/// reaches a label value.
+fn record_tier_metrics(meta: &DetectionResult, deep_start: Instant) {
+    // Tier label: if deep spans were merged, call it deep. Otherwise the
+    // call went through fast (regex + fast-model). Even zero-span cases
+    // are labelled "fast" because the fast pipeline still ran.
+    let tier = if meta.deep_scan_used { "deep" } else { "fast" };
+    metrics::record_tier_used(tier);
+
+    if meta.deep_attempted {
+        metrics::record_deep_tier_attempted();
+        if meta.deep_scan_used {
+            metrics::record_deep_tier_succeeded();
+            metrics::record_deep_tier_latency(deep_start);
+        } else if let Some(err) = &meta.deep_error {
+            let kind = match err {
+                DetectionError::InferenceTimeout(_) => "timeout",
+                DetectionError::OllamaServerError(_) => "server_error",
+                DetectionError::ConnectionRefused(_) => "connection_refused",
+                DetectionError::ModelOutputParseError(_) => "parse_error",
+                DetectionError::EmptyModelResponse => "empty_response",
+                DetectionError::Other(_) => "other",
+            };
+            metrics::record_deep_tier_failed(kind);
+            if matches!(err, DetectionError::ConnectionRefused(_)) {
+                metrics::record_ollama_connection_error();
+            }
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Code-block extraction
@@ -167,46 +202,70 @@ async fn handle_inner(
         .map(|s| s.to_string())
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
-    let mut all_spans = Vec::new();
-    let mut anonymized_contents: Vec<(usize, String)> = Vec::new();
-
     let inference_start = Instant::now();
 
-    for (idx, content) in &contents {
-        // 2a. Extract code blocks before PII detection.
-        let (stripped, code_blocks) = extract_code_blocks(content);
+    // Stage 1: parallel per-message detection, bounded by detection_semaphore.
+    // Each task owns its own permit via acquire_owned so the Future stays
+    // 'static for join_all; the permit drops with the task, returning the slot.
+    //
+    // Prior to 2026-04-22 this loop was strictly sequential, which meant a
+    // 10-message request at 3s/detection paid ~30s before upstream ever saw
+    // the body. With bounded parallelism (default 2) that drops to ~15s on
+    // the same shape, while capping Ollama pressure. Codex T4 from
+    // plan-eng-review.
+    let detection_tasks = contents.iter().map(|(idx, content)| {
+        let idx = *idx;
+        let content = content.clone();
+        let detector = Arc::clone(&state.detector);
+        let sem = Arc::clone(&state.detection_semaphore);
+        async move {
+            let _permit = sem.acquire_owned().await.expect("semaphore never closed");
+            let (stripped, code_blocks) = extract_code_blocks(&content);
+            let deep_start = Instant::now();
+            let result = detector.detect_with_metadata(&stripped).await;
+            (idx, content, stripped, code_blocks, result, deep_start)
+        }
+    });
+    let detection_results = join_all(detection_tasks).await;
 
-        // 3. Run PII detection on the text with code blocks removed.
-        let spans = state
-            .detector
-            .detect(&stripped)
-            .await
-            .map_err(GatewayError::ModelUnavailable)?;
+    // Stage 2: emit tier-visibility metrics and substitute placeholders. We
+    // collect placeholders per message and batch the session store writes in
+    // Stage 3 because SQLite performs better with grouped inserts than with
+    // concurrent writers scattered across parallel futures.
+    let mut all_spans = Vec::new();
+    let mut anonymized_contents: Vec<(usize, String)> = Vec::new();
+    let mut pending_placeholder_batches = Vec::new();
 
-        if spans.is_empty() {
-            // No PII — keep original content.
-            anonymized_contents.push((*idx, content.clone()));
+    for (idx, content, stripped, code_blocks, result, deep_start) in detection_results {
+        let meta: DetectionResult = result.map_err(GatewayError::ModelUnavailable)?;
+        record_tier_metrics(&meta, deep_start);
+
+        if meta.spans.is_empty() {
+            anonymized_contents.push((idx, content));
             continue;
         }
 
-        // 4. Substitute PII with placeholders.
-        let (substituted, placeholders) = placeholder::substitute(&stripped, &spans);
-
-        // 4a. Restore code blocks around the substituted text.
+        let (substituted, placeholders) = placeholder::substitute(&stripped, &meta.spans);
         let final_text = restore_code_blocks(&substituted, &code_blocks);
 
-        // 5. Store placeholder mappings.
-        state
-            .session_store
-            .store(&session_id, &placeholders)
-            .await
-            .map_err(GatewayError::SessionStore)?;
-
-        all_spans.extend(spans);
-        anonymized_contents.push((*idx, final_text));
+        pending_placeholder_batches.push(placeholders);
+        all_spans.extend(meta.spans);
+        anonymized_contents.push((idx, final_text));
     }
 
-    // Record model inference duration.
+    // Stage 3: batch the session-store writes sequentially. Placeholder IDs
+    // are UUIDs so ordering within the request doesn't matter for
+    // correctness — this just keeps the SQLite write pattern simple.
+    for batch in &pending_placeholder_batches {
+        state
+            .session_store
+            .store(&session_id, batch)
+            .await
+            .map_err(GatewayError::SessionStore)?;
+    }
+
+    // Record aggregate model inference duration (wall-clock across all
+    // messages in this request, whether they ran in parallel or not).
     metrics::record_model_inference_duration(inference_start);
 
     // Record PII detection counts by type.
