@@ -19,23 +19,34 @@ Generated 2026-04-22 from `/plan-ceo-review`. Each item has a concrete revisit d
 
 ### Re-benchmark under Ollama with 100+ prompts
 
-**Deadline:** immediately after wire-up PR lands. Blocks any external recall claim.
+**Deadline:** immediately runnable. Blocks any external recall claim.
 
 **Why:** Two gaps rolled into one item:
 1. Existing `eval/BENCHMARK_RESULTS.md` used llama.cpp / LM Studio, NOT Ollama. Config defaults now target `gemma4:e4b` + `gemma4:26b` via Ollama. Benchmark numbers don't transfer — different runtime, different prompt shape handling, different tokenization.
 2. `eval/sample_benchmark.jsonl` is 5 prompts / 7 spans. Claim depth = vibes. External claim requires ≥100 prompts.
 
-**Plan:**
-- Re-run eval harness against `gemma4:e4b` and `gemma4:26b` through Ollama (not LM Studio).
-- Expand dataset to 100+ prompts using public PII datasets (PII-200 synthetic, HIPAA-style, WikiBio-PII).
-- Target: ≥150 ground-truth spans, mixed explicit + implicit.
-- Publish results with confidence intervals. Mark prior benchmark as superseded.
+**Status (2026-04-22): READY TO RUN.**
+- `eval/run_benchmark.py` extended with `--backend ollama` (default) and `--backend llamacpp`. Ollama backend hits `/api/chat` with `stream=false` and the same system prompt.
+- `eval/generate_pii_100.py` produces `eval/pii_100.jsonl` — **105 entries, 169 ground-truth spans** (143 explicit + 26 implicit). Six categories: explicit PII, implicit PII, multi-PII, non-PII controls, code blocks, Unicode/edge-case inputs. All span offsets auto-computed and verified.
+- `eval/BENCHMARK_RESULTS.md` annotated: "NOT VALIDATED UNDER OLLAMA. Re-benchmark pending."
 
-**Current benchmark status (as of 2026-04-22):**
-- `eval/BENCHMARK_RESULTS.md` annotated at top: "NOT VALIDATED UNDER OLLAMA. Re-benchmark pending."
+**To run:**
+```
+ollama pull gemma4:e4b      # ~4 GB
+ollama pull gemma4:26b      # ~18 GB (optional, only if you want the deep tier)
+ollama serve                 # usually already running
 
-**Started:** 2026-04-22
-**Revisit:** immediately post wire-up PR, latest 2026-05-22
+python3 eval/run_benchmark.py --model gemma4:e4b --dataset eval/pii_100.jsonl \
+    --output eval/results_e4b.jsonl
+python3 eval/run_benchmark.py --model gemma4:26b --dataset eval/pii_100.jsonl \
+    --output eval/results_26b.jsonl
+```
+
+**After running:** update `eval/BENCHMARK_RESULTS.md` with the Ollama numbers,
+remove the "NOT VALIDATED" banner, and compare against the prior llama.cpp
+figures to see whether the runtime change moves recall/latency meaningfully.
+
+**Revisit:** once Ollama-backed numbers are in hand, latest 2026-05-22.
 
 ---
 
