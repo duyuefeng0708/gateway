@@ -89,10 +89,7 @@ async fn check_ollama(
             };
 
             // Try to parse response body once and check each model against it.
-            let body = match resp.text().await {
-                Ok(b) => Some(b),
-                Err(_) => None,
-            };
+            let body = resp.text().await.ok();
 
             let mut model_checks = vec![match &body {
                 Some(b) => check_model_in_response(b, fast_model, "Fast model loaded"),
@@ -326,7 +323,7 @@ fn statvfs_free_mb(path: &Path) -> Option<u64> {
 
     if result == 0 {
         let stat = unsafe { stat.assume_init() };
-        let free_bytes = stat.f_bavail as u64 * stat.f_bsize as u64;
+        let free_bytes = stat.f_bavail * stat.f_bsize;
         Some(free_bytes / (1024 * 1024))
     } else {
         None

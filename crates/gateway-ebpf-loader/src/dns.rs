@@ -137,7 +137,7 @@ async fn resolve_host(host: &str, port: u16) -> std::io::Result<ResolvedEndpoint
         Ok(resolved)
     })
     .await
-    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))??;
+    .map_err(std::io::Error::other)??;
 
     Ok(resolved)
 }

@@ -96,7 +96,7 @@ async fn multiple_sessions_are_isolated() {
 async fn stored_pii_types_roundtrip_correctly() {
     let store = SessionStore::in_memory().await.unwrap();
 
-    let types_and_originals = vec![
+    let types_and_originals = [
         (PiiType::Person, "Alice"),
         (PiiType::Organization, "Acme"),
         (PiiType::Location, "NYC"),

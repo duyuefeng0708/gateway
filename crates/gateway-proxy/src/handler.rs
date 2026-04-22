@@ -73,17 +73,14 @@ fn extract_code_blocks(text: &str) -> (String, Vec<CodeBlock>) {
     let mut search_from = 0;
     let fence = "```";
 
-    loop {
-        let open = match text[search_from..].find(fence) {
-            Some(pos) => search_from + pos,
-            None => break,
-        };
+    while let Some(pos) = text[search_from..].find(fence) {
+        let open = search_from + pos;
         // The closing fence starts after the opening fence.
         let after_open = open + fence.len();
-        let close = match text[after_open..].find(fence) {
-            Some(pos) => after_open + pos + fence.len(),
-            None => break, // Unmatched fence — stop looking.
+        let Some(close_pos) = text[after_open..].find(fence) else {
+            break; // Unmatched fence — stop looking.
         };
+        let close = after_open + close_pos + fence.len();
 
         let marker = format!("__CODEBLOCK_{}_", blocks.len());
         blocks.push(CodeBlock {

@@ -330,7 +330,7 @@ mod tests {
     impl MockDetector {
         fn new(name: &str, spans: Vec<PiiSpan>) -> Self {
             Self {
-                spans: spans,
+                spans,
                 name: name.to_string(),
             }
         }
@@ -381,7 +381,7 @@ mod tests {
     }
 
     fn make_long_text(word_count: usize) -> String {
-        std::iter::repeat("word").take(word_count).collect::<Vec<_>>().join(" ")
+        std::iter::repeat_n("word", word_count).collect::<Vec<_>>().join(" ")
     }
 
     // -- Tests ------------------------------------------------------------------
