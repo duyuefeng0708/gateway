@@ -91,18 +91,15 @@ All retained under HOLD SCOPE decision on 2026-04-22. If unused in real path by 
 **Load-bearing?** Only if users write `rules.yaml`. Default config has no rules file.
 **Revisit:** 2026-05-22. If no user has created rules.yaml, feature-flag behind `GATEWAY_FEATURE_CUSTOM_RULES`.
 
-### Warm-up self-DOS risk (Codex T8)
+### Warm-up self-DOS risk (Codex T8) — MITIGATED
 
-**Concern:** At 8s client timeout + 86s server-side generation, Ollama keeps processing the probe request after the client hangs up. 5 retries × 86s = ~7 minutes of wasted model time per boot. No cancellation today.
+**Status 2026-04-22:** Investigation written up in `docs/investigations/2026-04-22-codex-t8-warmup-self-dos.md`. Confirmed behaviour: Ollama does NOT abort in-flight generation when the client disconnects. A timed-out `send` wastes up to `num_predict` tokens of server compute.
 
-**Plan:**
-- Warm-up probe should use a minimal synthetic prompt (1–2 tokens: e.g., `"hi"`).
-- Investigate Ollama's request cancellation behavior via HTTP connection close — does it kill generation or keep going?
-- Consider `/api/generate` with `keep_alive=0` to avoid warming a persistent model instance at probe time.
+**Mitigation shipped:** `OllamaDetector::build_request` now attaches `num_predict = 1024` to every `ChatMessageRequest`. Worst-case server-side waste per timed-out call drops from "generation runs to model-chosen limit" to a deterministic 1024-token ceiling (~40s on laptop Gemma-4-26B).
 
-**Priority:** P2 — not blocking wire-up but real operational waste. Revisit first time warm-up is observed in practice.
+**Remaining concern:** Cold-boot contention with concurrent real traffic. Operators should treat `/ready == 503` as "do not send traffic yet." `docker-compose.yml` wires the healthcheck to do this automatically.
 
-**Revisit:** After first real-world deployment observation, max 2026-05-22.
+**Further work deferred:** Smaller probe-specific `num_predict` budget (e.g. 128 for warm-up only). Not shipped because it would require threading per-call budgets through the `PiiDetector` trait. Deferred until there's a real operational signal.
 
 ---
 

@@ -45,14 +45,75 @@ export ANTHROPIC_API_KEY=sk-...
 
 # Start the gateway + Ollama sidecar. Defaults to scan_mode=fast:
 # regex + gemma4:e4b only, ~3s per request, implicit PII is NOT caught.
-docker compose up
+docker compose up -d
+
+# Wait for warm-up to complete. /ready flips to 200 once the fast model
+# is loaded and the warm-up probe has succeeded once.
+until curl -fsS http://localhost:8443/ready >/dev/null; do sleep 2; done
 
 # Send a request through the proxy
 curl -X POST http://localhost:8443/v1/messages \
   -H "Content-Type: application/json" \
   -H "x-api-key: $ANTHROPIC_API_KEY" \
   -d '{"model":"claude-sonnet-4-20250514","max_tokens":256,"messages":[{"role":"user","content":"My name is Alice and I live in Portland."}]}'
+
+# Confirm anonymization actually ran
+curl -sS http://localhost:8443/metrics | grep gateway_detector_tier_used
+# Expect: gateway_detector_tier_used{tier="fast"} 1
 ```
+
+### Use with Claude Code
+
+Claude Code respects two env vars that let you route all traffic through
+the gateway without changing any application code:
+
+```bash
+export ANTHROPIC_BASE_URL=http://localhost:8443
+export ANTHROPIC_API_KEY=sk-...   # your real Anthropic key
+
+# Normal Claude Code workflows now flow through the gateway.
+# The gateway strips PII before forwarding to api.anthropic.com and
+# restores placeholders in the streamed response before Claude Code
+# sees it. Claude Code never observes the raw PII and the model never
+# observes the placeholders.
+claude
+
+# In another terminal, watch the tier metric increment on each turn:
+watch -n 1 'curl -sS http://localhost:8443/metrics | grep gateway_detector_tier_used'
+```
+
+Unset the vars (`unset ANTHROPIC_BASE_URL`) to bypass the gateway.
+
+### End-to-end demo: observe a placeholder round-trip
+
+The `/v1/anonymize` and `/v1/deanonymize` endpoints let you see the
+substitution without a full model call. Useful as a smoke test or to
+show a teammate what the gateway actually does:
+
+```bash
+# 1. Anonymize — returns session_id, placeholders, and privacy score.
+ANON=$(curl -sS -X POST http://localhost:8443/v1/anonymize \
+  -H 'Content-Type: application/json' \
+  -d '{"text":"My name is Alice Chen and my email is alice@acme.com."}')
+echo "$ANON" | jq .
+
+# 2. Grab the anonymized text + session id.
+SESSION=$(echo "$ANON" | jq -r .session_id)
+ANON_TEXT=$(echo "$ANON" | jq -r .anonymized)
+echo "anonymized: $ANON_TEXT"
+# anonymized: My name is [PERSON_abcd1234] and my email is [EMAIL_ef567890].
+
+# 3. Deanonymize — restores the original text using session placeholders.
+curl -sS -X POST http://localhost:8443/v1/deanonymize \
+  -H 'Content-Type: application/json' \
+  -d "{\"session_id\":\"$SESSION\",\"text\":\"$ANON_TEXT\"}" | jq .
+# {"text": "My name is Alice Chen and my email is alice@acme.com."}
+```
+
+This is the same mechanism that runs invisibly around every Claude Code
+request -- except that in the proxied path the `anonymized` text is what
+api.anthropic.com sees, and the `deanonymize` step runs on the response
+stream before it reaches your terminal.
 
 ## Scan modes
 

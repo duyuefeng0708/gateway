@@ -3,11 +3,26 @@ use gateway_common::errors::DetectionError;
 use gateway_common::types::{PiiSpan, PiiType};
 use ollama_rs::generation::chat::request::ChatMessageRequest;
 use ollama_rs::generation::chat::ChatMessage;
+use ollama_rs::models::ModelOptions;
 use ollama_rs::Ollama;
 use serde::Deserialize;
 use std::time::Duration;
 
 use crate::detector::PiiDetector;
+
+/// Bound on server-side token generation per detect() call.
+///
+/// Motivation (Codex T8 / warm-up self-DOS mitigation): when the client
+/// times out on an Ollama request, the Ollama server continues generating
+/// tokens until it hits its own limit. Without `num_predict`, that limit
+/// is effectively unbounded for chat requests, which means a warm-up probe
+/// that 8-second-times-out on a cold deep model can waste several minutes
+/// of server-side compute before the server notices no one is reading.
+///
+/// A JSON array of PII spans for a 1-2 KB prompt is well under 512 tokens
+/// in every case we have observed. 1024 leaves headroom for unusually
+/// dense PII (e.g. long tables) while still bounding the worst case.
+const DETECTION_NUM_PREDICT: i32 = 1024;
 
 /// System prompt instructing the model to return PII spans as a JSON array.
 ///
@@ -89,6 +104,13 @@ impl OllamaDetector {
     }
 
     /// Build the chat request for a user prompt.
+    ///
+    /// Sets `num_predict = DETECTION_NUM_PREDICT` to bound server-side
+    /// generation length. This matters on client timeout: without the
+    /// cap, Ollama keeps generating for several minutes on cold models
+    /// after the client disconnects (Codex T8). With the cap, the
+    /// worst-case wasted server compute is at most DETECTION_NUM_PREDICT
+    /// tokens per timed-out request.
     fn build_request(&self, text: &str) -> ChatMessageRequest {
         ChatMessageRequest::new(
             self.model.clone(),
@@ -97,6 +119,7 @@ impl OllamaDetector {
                 ChatMessage::user(text.to_string()),
             ],
         )
+        .options(ModelOptions::default().num_predict(DETECTION_NUM_PREDICT))
     }
 
     /// Parse the model's raw text response into PII spans.
