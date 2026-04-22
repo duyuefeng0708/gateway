@@ -131,31 +131,85 @@ mod tests {
 
     #[test]
     fn config_requires_api_key() {
-        // Clear any existing keys
-        env::remove_var("ANTHROPIC_API_KEY");
-        env::remove_var("OPENAI_API_KEY");
-        let result = GatewayConfig::from_env();
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("API_KEY"));
+        // temp_env scopes env changes to this closure, restoring on drop —
+        // eliminates the ordering-dependent flakiness the old tests had.
+        temp_env::with_vars(
+            [
+                ("ANTHROPIC_API_KEY", None::<&str>),
+                ("OPENAI_API_KEY", None::<&str>),
+            ],
+            || {
+                let result = GatewayConfig::from_env();
+                assert!(result.is_err());
+                assert!(result.unwrap_err().contains("API_KEY"));
+            },
+        );
     }
 
     #[test]
     fn config_parses_with_defaults() {
-        env::set_var("ANTHROPIC_API_KEY", "test-key");
-        let config = GatewayConfig::from_env().unwrap();
-        assert_eq!(config.listen_addr, "127.0.0.1:8443");
-        assert_eq!(config.upstream_url, "https://api.anthropic.com");
-        assert_eq!(config.upstream_url_openai, "https://api.openai.com");
-        // Model defaults match the Ollama tags validated as ship-worthy in
-        // plan-eng-review (Codex T2/T3). Scan mode stays fast on laptop.
-        assert_eq!(config.fast_model, "gemma4:e4b");
-        assert_eq!(config.deep_model, "gemma4:26b");
-        assert_eq!(config.scan_mode, ScanMode::Fast);
-        assert_eq!(config.detection_timeout, Duration::from_secs(8));
-        assert_eq!(config.upstream_timeout, Duration::from_secs(60));
-        assert_eq!(config.detection_concurrency, 2);
-        assert!(config.show_score);
-        assert!(config.streaming_enabled);
-        env::remove_var("ANTHROPIC_API_KEY");
+        temp_env::with_vars(
+            [
+                ("ANTHROPIC_API_KEY", Some("test-key")),
+                ("OPENAI_API_KEY", None::<&str>),
+                ("GATEWAY_LISTEN", None::<&str>),
+                ("GATEWAY_UPSTREAM", None::<&str>),
+                ("GATEWAY_UPSTREAM_OPENAI", None::<&str>),
+                ("GATEWAY_FAST_MODEL", None::<&str>),
+                ("GATEWAY_DEEP_MODEL", None::<&str>),
+                ("GATEWAY_SCAN_MODE", None::<&str>),
+                ("GATEWAY_DETECTION_TIMEOUT", None::<&str>),
+                ("GATEWAY_UPSTREAM_TIMEOUT", None::<&str>),
+                ("GATEWAY_DETECTION_CONCURRENCY", None::<&str>),
+            ],
+            || {
+                let config = GatewayConfig::from_env().unwrap();
+                assert_eq!(config.listen_addr, "127.0.0.1:8443");
+                assert_eq!(config.upstream_url, "https://api.anthropic.com");
+                assert_eq!(config.upstream_url_openai, "https://api.openai.com");
+                // Model defaults match Ollama tags Codex verified in the
+                // plan-eng-review (T2/T3). Scan mode stays fast on laptop.
+                assert_eq!(config.fast_model, "gemma4:e4b");
+                assert_eq!(config.deep_model, "gemma4:26b");
+                assert_eq!(config.scan_mode, ScanMode::Fast);
+                assert_eq!(config.detection_timeout, Duration::from_secs(8));
+                assert_eq!(config.upstream_timeout, Duration::from_secs(60));
+                assert_eq!(config.detection_concurrency, 2);
+                assert!(config.show_score);
+                assert!(config.streaming_enabled);
+            },
+        );
+    }
+
+    #[test]
+    fn config_split_timeouts_parse_independently() {
+        temp_env::with_vars(
+            [
+                ("ANTHROPIC_API_KEY", Some("test-key")),
+                ("GATEWAY_DETECTION_TIMEOUT", Some("2")),
+                ("GATEWAY_UPSTREAM_TIMEOUT", Some("120")),
+                ("GATEWAY_DETECTION_CONCURRENCY", Some("8")),
+            ],
+            || {
+                let config = GatewayConfig::from_env().unwrap();
+                assert_eq!(config.detection_timeout, Duration::from_secs(2));
+                assert_eq!(config.upstream_timeout, Duration::from_secs(120));
+                assert_eq!(config.detection_concurrency, 8);
+            },
+        );
+    }
+
+    #[test]
+    fn config_rejects_invalid_concurrency() {
+        temp_env::with_vars(
+            [
+                ("ANTHROPIC_API_KEY", Some("test-key")),
+                ("GATEWAY_DETECTION_CONCURRENCY", Some("not-a-number")),
+            ],
+            || {
+                let err = GatewayConfig::from_env().unwrap_err();
+                assert!(err.contains("DETECTION_CONCURRENCY"));
+            },
+        );
     }
 }

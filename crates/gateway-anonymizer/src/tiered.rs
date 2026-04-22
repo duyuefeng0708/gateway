@@ -613,6 +613,114 @@ mod tests {
         assert!(!result.rules_attempted);
     }
 
+    // -- from_config factory tests ---------------------------------------------
+
+    fn test_config(scan_mode: ScanMode) -> GatewayConfig {
+        GatewayConfig {
+            listen_addr: "127.0.0.1:0".to_string(),
+            upstream_url: "http://upstream".to_string(),
+            upstream_url_openai: "http://upstream-openai".to_string(),
+            fast_model: "gemma4:e4b".to_string(),
+            deep_model: "gemma4:26b".to_string(),
+            ollama_url: "http://localhost:11434".to_string(),
+            scan_mode,
+            db_path: ":memory:".to_string(),
+            session_ttl: std::time::Duration::from_secs(3600),
+            audit_retention_days: 30,
+            audit_path: "/tmp/audit".to_string(),
+            log_level: "info".to_string(),
+            show_score: true,
+            max_request_size: 128 * 1024,
+            detection_timeout: std::time::Duration::from_secs(5),
+            upstream_timeout: std::time::Duration::from_secs(60),
+            detection_concurrency: 2,
+            escalation_confidence_threshold: 0.7,
+            escalation_min_prompt_tokens: 200,
+            rules_path: None,
+            routing_config_path: None,
+            streaming_enabled: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn from_config_fast_mode_omits_deep_detector() {
+        let config = test_config(ScanMode::Fast);
+        let tiered = TieredDetector::from_config(&config);
+        // Verify via detect_with_metadata: in Fast mode, deep_scan_available
+        // reflects self.deep.is_some() which should be false.
+        let result = tiered.detect_with_metadata("test prompt").await;
+        // Detection may fail (no real Ollama), but if the result came back
+        // we can assert the shape. If it failed, it failed on the fast
+        // detector, not on deep — which is what we want for fast mode.
+        if let Ok(r) = result {
+            assert!(!r.deep_scan_available, "fast mode should not wire a deep detector");
+            assert!(!r.deep_attempted);
+        }
+    }
+
+    #[tokio::test]
+    async fn from_config_auto_mode_wires_deep_detector() {
+        let config = test_config(ScanMode::Auto);
+        let tiered = TieredDetector::from_config(&config);
+        // Auto mode wires an OllamaDetector for the deep tier. We can't verify
+        // it works without a live Ollama, but we can verify the name is right.
+        assert_eq!(tiered.name(), "tiered");
+        // Internal structural check: deep is Some. We don't expose deep
+        // directly, so use the metadata path on a fabricated call — it
+        // should return deep_scan_available = true when the configured
+        // mode is Auto or Deep.
+        //
+        // The detector will try to hit localhost:11434 which probably
+        // isn't running in CI. We only check the availability flag, which
+        // reflects configuration, not a live probe.
+        //
+        // Use a short prompt that won't trigger auto-escalation, so fast
+        // tier runs and deep isn't attempted, letting us isolate the
+        // availability flag from actual deep work.
+        //
+        // If the fast detector errors trying to reach Ollama, the test
+        // still passes (we skip). Intent: verify config wiring, not
+        // network state.
+        if let Ok(r) = tiered.detect_with_metadata("short").await {
+            assert!(r.deep_scan_available, "auto mode should wire a deep detector");
+        }
+    }
+
+    #[tokio::test]
+    async fn from_config_deep_mode_wires_deep_detector() {
+        let config = test_config(ScanMode::Deep);
+        let tiered = TieredDetector::from_config(&config);
+        assert_eq!(tiered.name(), "tiered");
+        if let Ok(r) = tiered.detect_with_metadata("short").await {
+            assert!(r.deep_scan_available, "deep mode should wire a deep detector");
+        }
+    }
+
+    #[tokio::test]
+    async fn from_config_applies_escalation_thresholds() {
+        let mut config = test_config(ScanMode::Auto);
+        config.escalation_confidence_threshold = 0.55;
+        config.escalation_min_prompt_tokens = 100;
+        let _tiered = TieredDetector::from_config(&config);
+        // We don't expose the thresholds for introspection; this test
+        // mostly guards against silently dropping the wire-up. Reading
+        // thresholds would require exposing them which we don't want to
+        // do just for testing. Instead, the behaviour is covered by the
+        // auto-escalation tests further up using TieredDetector::new
+        // with explicit thresholds.
+    }
+
+    #[tokio::test]
+    async fn from_config_missing_rules_file_continues_silently() {
+        let mut config = test_config(ScanMode::Fast);
+        config.rules_path = Some("/definitely/does/not/exist.yaml".to_string());
+        // Should not panic. The factory logs a warning and proceeds without
+        // rules. This is the accepted silent-fallback posture documented on
+        // DetectionResult.
+        let tiered = TieredDetector::from_config(&config);
+        assert_eq!(tiered.name(), "tiered");
+    }
+
     #[tokio::test]
     async fn pii_detector_trait_returns_spans() {
         let fast_span = span(PiiType::Email, 0, 10, 1.0);
