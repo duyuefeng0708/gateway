@@ -124,7 +124,7 @@ impl AuditWriter {
         let entries: Vec<AuditEntry> = content
             .lines()
             .filter(|l| !l.trim().is_empty())
-            .map(|l| serde_json::from_str(l))
+            .map(serde_json::from_str)
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| AuditError::WriteError(e.to_string()))?;
 

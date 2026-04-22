@@ -1,11 +1,11 @@
-/// Line-buffered SSE event accumulator.
-///
-/// TCP delivers bytes at arbitrary boundaries. An SSE event like
-/// `data: {"delta":"[PERSON_abc12345]"}\n\n` may arrive split across
-/// multiple TCP frames. This buffer accumulates raw bytes and emits
-/// complete SSE events (delimited by `\n\n`) only when they are fully
-/// received. Incomplete UTF-8 sequences at chunk boundaries are held
-/// until the next chunk completes them.
+//! Line-buffered SSE event accumulator.
+//!
+//! TCP delivers bytes at arbitrary boundaries. An SSE event like
+//! `data: {"delta":"[PERSON_abc12345]"}\n\n` may arrive split across
+//! multiple TCP frames. This buffer accumulates raw bytes and emits
+//! complete SSE events (delimited by `\n\n`) only when they are fully
+//! received. Incomplete UTF-8 sequences at chunk boundaries are held
+//! until the next chunk completes them.
 
 pub struct SseLineBuffer {
     /// Raw byte accumulator. May contain incomplete UTF-8 at the tail.

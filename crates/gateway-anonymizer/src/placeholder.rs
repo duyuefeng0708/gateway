@@ -9,36 +9,123 @@ use regex::Regex;
 /// valid after each substitution. If the same entity text appears more than
 /// once, the same placeholder is reused (deduplication).
 ///
+/// The 4B fast detector sometimes emits offsets that don't land on UTF-8
+/// char boundaries or don't match `span.text`. Before applying a span we:
+///   1. Verify `text.is_char_boundary(start) && text.is_char_boundary(end)`.
+///   2. Verify `text[start..end] == span.text`.
+///   3. If either check fails, search for `span.text` in the original text
+///      and accept the first match that doesn't overlap any range already
+///      claimed by an earlier (valid) span.
+///   4. If no non-overlapping match exists, log at warn and skip the span.
+///
 /// Returns the redacted text together with the generated placeholders.
 pub fn substitute(text: &str, spans: &[PiiSpan]) -> (String, Vec<Placeholder>) {
-    // Sort spans by start position descending so replacements don't shift
-    // earlier offsets.
-    let mut sorted: Vec<&PiiSpan> = spans.iter().collect();
-    sorted.sort_by(|a, b| b.start.cmp(&a.start));
+    // Pre-validate every span so we can compute the set of claimed ranges
+    // before any fallback searches run. Otherwise, a valid span that appears
+    // later in `spans` could lose its byte range to an earlier span's fallback.
+    let mut resolved: Vec<(usize, usize, &PiiSpan)> = Vec::with_capacity(spans.len());
+    let mut claimed: Vec<(usize, usize)> = Vec::with_capacity(spans.len());
+
+    // Pass 1: accept spans whose offsets are valid and whose text matches.
+    let mut needs_fallback: Vec<&PiiSpan> = Vec::new();
+    for span in spans {
+        if offsets_valid(text, span) {
+            resolved.push((span.start, span.end, span));
+            claimed.push((span.start, span.end));
+        } else {
+            needs_fallback.push(span);
+        }
+    }
+
+    // Pass 2: for spans with bad offsets, search for `span.text` and accept
+    // the first occurrence that doesn't overlap an already-claimed range.
+    for span in needs_fallback {
+        if span.text.is_empty() {
+            tracing::warn!(
+                "placeholder substitute: bad offsets and no unambiguous text match, skipping span: type={:?}, text={:?}",
+                span.pii_type,
+                span.text,
+            );
+            continue;
+        }
+        match find_non_overlapping(text, &span.text, &claimed) {
+            Some((s, e)) => {
+                resolved.push((s, e, span));
+                claimed.push((s, e));
+            }
+            None => {
+                tracing::warn!(
+                    "placeholder substitute: bad offsets and no unambiguous text match, skipping span: type={:?}, text={:?}",
+                    span.pii_type,
+                    span.text,
+                );
+            }
+        }
+    }
+
+    // Sort resolved spans by start position descending so replacements don't
+    // shift earlier offsets.
+    resolved.sort_by_key(|r| std::cmp::Reverse(r.0));
 
     // Dedup map: original_text -> Placeholder
     let mut dedup: HashMap<String, Placeholder> = HashMap::new();
     let mut result = text.to_string();
 
-    for span in &sorted {
+    for (start, end, span) in &resolved {
         let original = &span.text;
         let placeholder = dedup
             .entry(original.clone())
             .or_insert_with(|| Placeholder::new(span.pii_type, original.clone()));
 
-        let start = span.start;
-        let end = span.end;
-
-        // Guard against out-of-bounds spans.
-        if start > result.len() || end > result.len() || start > end {
-            continue;
-        }
-
-        result.replace_range(start..end, &placeholder.placeholder_text);
+        result.replace_range(*start..*end, &placeholder.placeholder_text);
     }
 
     let placeholders: Vec<Placeholder> = dedup.into_values().collect();
     (result, placeholders)
+}
+
+/// True if the span's byte offsets land on char boundaries, are in-range,
+/// and the slice `text[start..end]` equals `span.text`.
+fn offsets_valid(text: &str, span: &PiiSpan) -> bool {
+    let start = span.start;
+    let end = span.end;
+    if start > end || end > text.len() {
+        return false;
+    }
+    if !text.is_char_boundary(start) || !text.is_char_boundary(end) {
+        return false;
+    }
+    &text[start..end] == span.text.as_str()
+}
+
+/// Find the first occurrence of `needle` in `haystack` whose byte range does
+/// not overlap any range in `claimed`. Adjacent ranges (touching endpoints)
+/// do not count as overlap.
+fn find_non_overlapping(
+    haystack: &str,
+    needle: &str,
+    claimed: &[(usize, usize)],
+) -> Option<(usize, usize)> {
+    let mut search_from = 0;
+    while search_from <= haystack.len() {
+        let rel = haystack[search_from..].find(needle)?;
+        let start = search_from + rel;
+        let end = start + needle.len();
+        let overlaps = claimed
+            .iter()
+            .any(|&(cs, ce)| start < ce && cs < end);
+        if !overlaps {
+            return Some((start, end));
+        }
+        // Advance past this match's start; step forward until we land on a
+        // char boundary so the next slice is valid.
+        let mut next = start + 1;
+        while next < haystack.len() && !haystack.is_char_boundary(next) {
+            next += 1;
+        }
+        search_from = next;
+    }
+    None
 }
 
 /// Restore original text by replacing every placeholder token with its

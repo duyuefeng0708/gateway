@@ -106,10 +106,8 @@ pub async fn run() -> io::Result<()> {
                     KeyCode::Backspace => {
                         app.input.pop();
                     }
-                    KeyCode::Enter => {
-                        if !app.input.is_empty() {
-                            app.analyze().await;
-                        }
+                    KeyCode::Enter if !app.input.is_empty() => {
+                        app.analyze().await;
                     }
                     _ => {}
                 }

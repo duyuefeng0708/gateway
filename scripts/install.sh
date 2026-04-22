@@ -45,14 +45,19 @@ Usage:
   sh install.sh [OPTIONS]
 
 Options:
-  --help          Show this help message
-  --docker-only   Skip binary install; set up Docker Compose only
-  --prefix DIR    Install binary to DIR (default: /usr/local/bin or ~/.local/bin)
-  --no-model      Skip pulling the Ollama model
-  --yes           Skip confirmation prompts
+  --help                Show this help message
+  --docker-only         Skip binary install; set up Docker Compose only
+  --prefix DIR          Install binary to DIR (default: /usr/local/bin or ~/.local/bin)
+  --no-model            Skip pulling the Ollama model
+  --with-deep           Also pull the 18GB deep-tier model (${GATEWAY_DEEP_MODEL:-gemma4:26b})
+                        for implicit-PII coverage. Off by default.
+  --yes                 Skip confirmation prompts
 
 Environment:
-  NO_COLOR        Disable colored output
+  NO_COLOR              Disable colored output
+  GATEWAY_FAST_MODEL    Override the fast model (default: gemma4:e4b)
+  GATEWAY_DEEP_MODEL    Override the deep model (default: gemma4:26b)
+  GATEWAY_INSTALL_DEEP  Set to 1 to pull the deep model (same as --with-deep)
 USAGE
   exit 0
 }
@@ -61,13 +66,20 @@ USAGE
 DOCKER_ONLY=0
 SKIP_MODEL=0
 AUTO_YES=0
+WITH_DEEP="${GATEWAY_INSTALL_DEEP:-0}"
 CUSTOM_PREFIX=""
+
+# Model defaults (overridable by env). Keep in sync with GatewayConfig::from_env
+# in crates/gateway-common/src/config.rs.
+FAST_MODEL="${GATEWAY_FAST_MODEL:-gemma4:e4b}"
+DEEP_MODEL="${GATEWAY_DEEP_MODEL:-gemma4:26b}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --help|-h)       usage ;;
     --docker-only)   DOCKER_ONLY=1 ;;
     --no-model)      SKIP_MODEL=1 ;;
+    --with-deep)     WITH_DEEP=1 ;;
     --yes|-y)        AUTO_YES=1 ;;
     --prefix)
       shift
@@ -321,20 +333,37 @@ pull_ollama_model() {
     if [ "$TRIES" -ge 30 ]; then
       warn "Ollama container did not become ready in time."
       warn "You can pull the model manually later:"
-      info "  docker exec gateway-ollama ollama pull MTBS/anonymizer"
+      info "  docker exec gateway-ollama ollama pull $FAST_MODEL"
       return
     fi
 
     success "Ollama container is running"
   fi
 
-  info "Pulling PII detection model (MTBS/anonymizer)..."
+  # Fast model is always pulled -- it's the default scan_mode=fast target.
+  info "Pulling fast PII detection model ($FAST_MODEL)..."
   info "This may take a few minutes depending on your connection."
-  if docker exec gateway-ollama ollama pull MTBS/anonymizer; then
-    success "Model MTBS/anonymizer pulled successfully"
+  if docker exec gateway-ollama ollama pull "$FAST_MODEL"; then
+    success "Model $FAST_MODEL pulled successfully"
   else
     warn "Model pull failed. You can retry later:"
-    info "  docker exec gateway-ollama ollama pull MTBS/anonymizer"
+    info "  docker exec gateway-ollama ollama pull $FAST_MODEL"
+  fi
+
+  # Deep model (~18GB) is opt-in only -- implicit-PII coverage takes ~86s/req
+  # on laptop CPU, so most users should stick with fast mode.
+  if [ "$WITH_DEEP" -eq 1 ]; then
+    info "Pulling deep PII detection model ($DEEP_MODEL)..."
+    info "This is ~18GB and may take a while."
+    if docker exec gateway-ollama ollama pull "$DEEP_MODEL"; then
+      success "Model $DEEP_MODEL pulled successfully"
+      info "Enable deep-tier detection with: GATEWAY_SCAN_MODE=auto (or deep)"
+    else
+      warn "Deep model pull failed. You can retry later:"
+      info "  docker exec gateway-ollama ollama pull $DEEP_MODEL"
+    fi
+  else
+    info "Skipping deep model. Rerun with --with-deep to pull 18GB $DEEP_MODEL for implicit-PII coverage."
   fi
 }
 

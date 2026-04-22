@@ -34,7 +34,9 @@ async fn test_state() -> gateway_proxy::AppState {
         log_level: "debug".to_string(),
         show_score: true,
         max_request_size: 128 * 1024,
-        model_timeout: std::time::Duration::from_secs(5),
+        detection_timeout: std::time::Duration::from_secs(5),
+        upstream_timeout: std::time::Duration::from_secs(5),
+        detection_concurrency: 2,
         escalation_confidence_threshold: 0.7,
         escalation_min_prompt_tokens: 200,
         rules_path: None,
@@ -48,6 +50,8 @@ async fn test_state() -> gateway_proxy::AppState {
         session_store: Arc::new(session_store),
         http_client,
         router: gateway_proxy::Router::default_router(),
+        warm: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+        detection_semaphore: Arc::new(tokio::sync::Semaphore::new(2)),
     }
 }
 
