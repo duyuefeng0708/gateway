@@ -91,6 +91,15 @@ If this value is growing, deep-tier detections are failing (timeout, model not l
 
 Run `gateway doctor` to verify that the configured models are actually loaded in Ollama -- when `scan_mode` is `auto` or `deep`, the deep-model check is included; in `fast` mode it is skipped.
 
+### Liveness and readiness
+
+The proxy exposes `GET /ready`:
+
+* **503 `warming`** — listener is bound but the startup warm-up probe has not yet succeeded. Safe to route traffic through (fast tier still works) but deep-tier calls are likely to silent-fallback until the model is loaded.
+* **200 `ok`** — warm-up probe succeeded. Normal operating state.
+
+`docker-compose.yml` wires this endpoint into the `gateway-proxy` service's healthcheck. `gateway-ebpf` waits for `gateway-proxy` to reach `service_healthy` before installing its cgroup hooks, so transparent interception never starts against a cold proxy. A one-shot `gateway-ollama-pull` sidecar pre-pulls `$GATEWAY_FAST_MODEL` (and `$GATEWAY_DEEP_MODEL` when `scan_mode` is `auto` or `deep`) before the proxy depends-on fires, so `docker compose up` is a genuine end-to-end boot rather than a race against model download.
+
 To run with cc-gateway as the upstream instead of Anthropic directly:
 
 ```bash
