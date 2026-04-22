@@ -38,7 +38,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Build the HTTP client for upstream forwarding with connection pooling.
     let http_client = reqwest::Client::builder()
-        .timeout(config.model_timeout)
+        .timeout(config.upstream_timeout)
         .pool_max_idle_per_host(32)
         .pool_idle_timeout(Duration::from_secs(90))
         .build()

@@ -19,7 +19,20 @@ pub struct GatewayConfig {
     pub log_level: String,
     pub show_score: bool,
     pub max_request_size: usize,
-    pub model_timeout: Duration,
+    /// Per-request PII detection budget (Ollama). Default 8s. Gemma-26B
+    /// exceeds this by a wide margin on laptop hardware — under the accepted
+    /// silent-fallback decision, deep tier will fail fast to regex results.
+    /// Users explicitly opting into laptop deep mode should raise this to
+    /// ~120s and expect ~86s/request.
+    pub detection_timeout: Duration,
+    /// Upstream HTTP client timeout (reqwest to Anthropic/OpenAI). Default
+    /// 60s. Separate from detection_timeout so raising one doesn't ripple
+    /// into the other.
+    pub upstream_timeout: Duration,
+    /// Max concurrent in-flight detect() calls per request, enforced via a
+    /// tokio Semaphore in AppState. Bounds Ollama pressure on multi-message
+    /// requests. Default 2.
+    pub detection_concurrency: usize,
     pub escalation_confidence_threshold: f64,
     pub escalation_min_prompt_tokens: usize,
     pub rules_path: Option<String>,
@@ -40,11 +53,8 @@ impl GatewayConfig {
             listen_addr: env_or("GATEWAY_LISTEN", "127.0.0.1:8443"),
             upstream_url: env_or("GATEWAY_UPSTREAM", "https://api.anthropic.com"),
             upstream_url_openai: env_or("GATEWAY_UPSTREAM_OPENAI", "https://api.openai.com"),
-            fast_model: env_or("GATEWAY_FAST_MODEL", "MTBS/anonymizer"),
-            deep_model: env_or(
-                "GATEWAY_DEEP_MODEL",
-                "qwen3.5-27b-claude-distilled",
-            ),
+            fast_model: env_or("GATEWAY_FAST_MODEL", "gemma4:e4b"),
+            deep_model: env_or("GATEWAY_DEEP_MODEL", "gemma4:26b"),
             ollama_url: env_or("GATEWAY_OLLAMA_URL", "http://localhost:11434"),
             scan_mode: env_or("GATEWAY_SCAN_MODE", "fast")
                 .parse()
@@ -61,7 +71,11 @@ impl GatewayConfig {
                 .parse()
                 .unwrap_or(true),
             max_request_size: 128 * 1024, // 128KB
-            model_timeout: Duration::from_secs(8),
+            detection_timeout: parse_duration(&env_or("GATEWAY_DETECTION_TIMEOUT", "8"))?,
+            upstream_timeout: parse_duration(&env_or("GATEWAY_UPSTREAM_TIMEOUT", "60"))?,
+            detection_concurrency: env_or("GATEWAY_DETECTION_CONCURRENCY", "2")
+                .parse()
+                .map_err(|e| format!("invalid GATEWAY_DETECTION_CONCURRENCY: {e}"))?,
             escalation_confidence_threshold: 0.7,
             escalation_min_prompt_tokens: 200,
             rules_path: env::var("GATEWAY_RULES_PATH").ok(),
@@ -132,8 +146,14 @@ mod tests {
         assert_eq!(config.listen_addr, "127.0.0.1:8443");
         assert_eq!(config.upstream_url, "https://api.anthropic.com");
         assert_eq!(config.upstream_url_openai, "https://api.openai.com");
-        assert_eq!(config.fast_model, "MTBS/anonymizer");
+        // Model defaults match the Ollama tags validated as ship-worthy in
+        // plan-eng-review (Codex T2/T3). Scan mode stays fast on laptop.
+        assert_eq!(config.fast_model, "gemma4:e4b");
+        assert_eq!(config.deep_model, "gemma4:26b");
         assert_eq!(config.scan_mode, ScanMode::Fast);
+        assert_eq!(config.detection_timeout, Duration::from_secs(8));
+        assert_eq!(config.upstream_timeout, Duration::from_secs(60));
+        assert_eq!(config.detection_concurrency, 2);
         assert!(config.show_score);
         assert!(config.streaming_enabled);
         env::remove_var("ANTHROPIC_API_KEY");
