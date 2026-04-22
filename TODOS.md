@@ -114,7 +114,17 @@ All retained under HOLD SCOPE decision on 2026-04-22. If unused in real path by 
 
 ---
 
-## P1 — Wire-up Plan (in progress 2026-04-22)
+## Shipped since 2026-04-22
+
+- **PR #1** — TieredDetector wire-up (30 items from the plan below). 1,854 lines added, 266 removed, 31 files. 296/296 tests pass, clippy clean. Merged to `main`.
+- **PR #2** — Ollama benchmark runnable end-to-end. `eval/run_benchmark.py --backend ollama` + 105-entry `eval/pii_100.jsonl` (169 spans, 143 explicit + 26 implicit). Merged.
+- **PR #3** — Docker compose wired to new `/ready` endpoint. One-shot `gateway-ollama-pull` sidecar pre-pulls models before the proxy boots. `gateway-ebpf` now waits for `service_healthy` on the proxy. Merged.
+
+The P1 block below is retained for historical reference.
+
+---
+
+## P1 — Wire-up Plan (shipped in PR #1 2026-04-22)
 
 Implementation tasks produced by this review + eng review + Codex adjudication.
 Do NOT defer these. Ordered loosely by dependency.
