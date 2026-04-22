@@ -2,15 +2,7 @@ use async_trait::async_trait;
 use gateway_common::errors::DetectionError;
 use gateway_common::types::{PiiSpan, ScanMode};
 
-use crate::detector::PiiDetector;
-
-/// Result of tiered PII detection, including metadata about which tiers ran.
-#[derive(Debug)]
-pub struct DetectionResult {
-    pub spans: Vec<PiiSpan>,
-    pub deep_scan_used: bool,
-    pub deep_scan_available: bool,
-}
+use crate::detector::{DetectionResult, PiiDetector};
 
 /// Composes regex, fast-model, and deep-model detectors with mode-based orchestration.
 ///
@@ -66,108 +58,32 @@ impl TieredDetector {
         self
     }
 
-    /// Run detection and return the full metadata result.
-    pub async fn detect_with_metadata(
+    /// Run the regex + rules + fast model tier. Returns the spans plus
+    /// rules-tier metadata so the caller can populate DetectionResult.
+    async fn run_fast_tier(
         &self,
         text: &str,
-    ) -> Result<DetectionResult, DetectionError> {
-        let deep_available = self.deep.is_some();
-
-        match self.mode {
-            ScanMode::Fast => {
-                let spans = self.run_fast_tier(text).await?;
-                let merged = merge_spans(spans);
-                Ok(DetectionResult {
-                    spans: merged,
-                    deep_scan_used: false,
-                    deep_scan_available: deep_available,
-                })
-            }
-            ScanMode::Deep => {
-                let mut fast_spans = self.run_fast_tier(text).await?;
-                match self.run_deep_tier(text).await {
-                    Ok(deep_spans) => {
-                        fast_spans.extend(deep_spans);
-                        let merged = merge_spans(fast_spans);
-                        Ok(DetectionResult {
-                            spans: merged,
-                            deep_scan_used: true,
-                            deep_scan_available: deep_available,
-                        })
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            error = %e,
-                            "deep model unavailable in deep mode, returning fast results only"
-                        );
-                        let merged = merge_spans(fast_spans);
-                        Ok(DetectionResult {
-                            spans: merged,
-                            deep_scan_used: false,
-                            deep_scan_available: false,
-                        })
-                    }
-                }
-            }
-            ScanMode::Auto => {
-                let fast_spans = self.run_fast_tier(text).await?;
-                let should_escalate = self.should_escalate(text, &fast_spans);
-
-                if should_escalate && deep_available {
-                    match self.run_deep_tier(text).await {
-                        Ok(deep_spans) => {
-                            let mut all = fast_spans;
-                            all.extend(deep_spans);
-                            let merged = merge_spans(all);
-                            Ok(DetectionResult {
-                                spans: merged,
-                                deep_scan_used: true,
-                                deep_scan_available: true,
-                            })
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                error = %e,
-                                "deep model unavailable during auto-escalation, returning fast results"
-                            );
-                            let merged = merge_spans(fast_spans);
-                            Ok(DetectionResult {
-                                spans: merged,
-                                deep_scan_used: false,
-                                deep_scan_available: false,
-                            })
-                        }
-                    }
-                } else {
-                    let merged = merge_spans(fast_spans);
-                    Ok(DetectionResult {
-                        spans: merged,
-                        deep_scan_used: false,
-                        deep_scan_available: deep_available,
-                    })
-                }
-            }
-        }
-    }
-
-    /// Run the regex + rules + fast model tier and collect all spans.
-    async fn run_fast_tier(&self, text: &str) -> Result<Vec<PiiSpan>, DetectionError> {
+    ) -> Result<(Vec<PiiSpan>, bool, Option<DetectionError>), DetectionError> {
         let regex_spans = self.regex.detect(text).await?;
         let fast_spans = self.fast.detect(text).await?;
         let mut all = regex_spans;
         all.extend(fast_spans);
 
-        // Custom YAML rules run alongside the regex pre-scan (both are fast).
+        let mut rules_attempted = false;
+        let mut rules_error: Option<DetectionError> = None;
+
         if let Some(rules) = &self.rules {
+            rules_attempted = true;
             match rules.detect(text).await {
                 Ok(rule_spans) => all.extend(rule_spans),
                 Err(e) => {
                     tracing::warn!(error = %e, "custom rules detector failed, continuing without");
+                    rules_error = Some(e);
                 }
             }
         }
 
-        Ok(all)
+        Ok((all, rules_attempted, rules_error))
     }
 
     /// Run the deep (27B) model tier. Returns an error if the deep model is unavailable.
@@ -212,6 +128,78 @@ impl PiiDetector for TieredDetector {
     async fn detect(&self, text: &str) -> Result<Vec<PiiSpan>, DetectionError> {
         let result = self.detect_with_metadata(text).await?;
         Ok(result.spans)
+    }
+
+    /// Orchestrate regex + fast + rules + (optional) deep detection with
+    /// tier-visibility tracking. Overrides the trait default so the proxy
+    /// can emit accurate metrics (tier_used, deep_attempted, deep_succeeded,
+    /// deep_error, rules_attempted, rules_error) from the returned struct.
+    async fn detect_with_metadata(
+        &self,
+        text: &str,
+    ) -> Result<DetectionResult, DetectionError> {
+        let deep_available = self.deep.is_some();
+
+        let (fast_spans, rules_attempted, rules_error) = self.run_fast_tier(text).await?;
+
+        let (spans, deep_attempted, deep_scan_used, deep_error) = match self.mode {
+            ScanMode::Fast => (fast_spans, false, false, None),
+            ScanMode::Deep => {
+                // Always attempt deep when in deep mode, even if not configured
+                // (run_deep_tier returns an error we capture). This is
+                // indistinguishable from "configured but failed" via the
+                // deep_scan_available flag, which keeps the state enumeration
+                // honest.
+                match self.run_deep_tier(text).await {
+                    Ok(deep_spans) => {
+                        let mut all = fast_spans;
+                        all.extend(deep_spans);
+                        (all, true, true, None)
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            "deep model unavailable in deep mode, returning fast results only"
+                        );
+                        (fast_spans, true, false, Some(e))
+                    }
+                }
+            }
+            ScanMode::Auto => {
+                let should_escalate = self.should_escalate(text, &fast_spans);
+                if should_escalate && deep_available {
+                    match self.run_deep_tier(text).await {
+                        Ok(deep_spans) => {
+                            let mut all = fast_spans;
+                            all.extend(deep_spans);
+                            (all, true, true, None)
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                "deep model unavailable during auto-escalation, returning fast results"
+                            );
+                            (fast_spans, true, false, Some(e))
+                        }
+                    }
+                } else {
+                    // Not escalated (or deep not configured): fast-only. This
+                    // is not a failure state; deep_attempted stays false.
+                    (fast_spans, false, false, None)
+                }
+            }
+        };
+
+        let merged = merge_spans(spans);
+        Ok(DetectionResult {
+            spans: merged,
+            deep_scan_available: deep_available,
+            deep_attempted,
+            deep_scan_used,
+            deep_error,
+            rules_attempted,
+            rules_error,
+        })
     }
 
     fn name(&self) -> &str {
@@ -474,11 +462,81 @@ mod tests {
         );
 
         let result = detector.detect_with_metadata("test").await.unwrap();
+        // Deep is configured so available is true — the semantic fix from the
+        // Codex eng review. Old code incorrectly flipped available to false on
+        // failure, which conflated "not configured" with "failed."
+        assert!(result.deep_scan_available);
         // Should have escalated (low confidence) but deep failed
+        assert!(result.deep_attempted);
         assert!(!result.deep_scan_used);
-        assert!(!result.deep_scan_available);
-        // Fast results still returned
+        assert!(result.deep_error.is_some());
+        // Fast results still returned (silent fallback)
         assert_eq!(result.spans.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn fast_mode_never_attempts_deep() {
+        let detector = TieredDetector::new(
+            MockDetector::boxed("regex", vec![]),
+            MockDetector::boxed("fast", vec![span(PiiType::Email, 0, 5, 0.9)]),
+            Some(MockDetector::boxed("deep", vec![])),
+            ScanMode::Fast,
+        );
+
+        let result = detector.detect_with_metadata("test").await.unwrap();
+        assert!(result.deep_scan_available);
+        assert!(!result.deep_attempted);
+        assert!(!result.deep_scan_used);
+        assert!(result.deep_error.is_none());
+    }
+
+    #[tokio::test]
+    async fn rules_metadata_populated_on_success() {
+        let detector = TieredDetector::new(
+            MockDetector::boxed("regex", vec![]),
+            MockDetector::boxed("fast", vec![]),
+            None,
+            ScanMode::Fast,
+        )
+        .with_rules(MockDetector::boxed(
+            "rules",
+            vec![span(PiiType::Credential, 0, 5, 0.99)],
+        ));
+
+        let result = detector.detect_with_metadata("test").await.unwrap();
+        assert!(result.rules_attempted);
+        assert!(result.rules_error.is_none());
+        assert_eq!(result.spans.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn rules_error_captured_silent_fallback() {
+        let detector = TieredDetector::new(
+            MockDetector::boxed("regex", vec![]),
+            MockDetector::boxed("fast", vec![span(PiiType::Email, 0, 5, 0.9)]),
+            None,
+            ScanMode::Fast,
+        )
+        .with_rules(Box::new(FailingDetector));
+
+        let result = detector.detect_with_metadata("test").await.unwrap();
+        assert!(result.rules_attempted);
+        assert!(result.rules_error.is_some());
+        // Fast result still returned
+        assert_eq!(result.spans.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn default_detect_with_metadata_for_non_tiered() {
+        // The trait's default impl should populate only spans and leave all
+        // tier flags false. MockDetector doesn't override it.
+        let detector = MockDetector::new("only-fast", vec![span(PiiType::Email, 0, 5, 1.0)]);
+        let result = detector.detect_with_metadata("anything").await.unwrap();
+        assert_eq!(result.spans.len(), 1);
+        assert!(!result.deep_scan_available);
+        assert!(!result.deep_attempted);
+        assert!(!result.deep_scan_used);
+        assert!(!result.rules_attempted);
     }
 
     #[tokio::test]

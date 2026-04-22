@@ -1,5 +1,12 @@
 # PII Detection Benchmark Results
 
+> **NOT VALIDATED UNDER OLLAMA.** Numbers below reflect runs against
+> llama.cpp / LM Studio. Config defaults now target Ollama
+> (`gemma4:e4b`, `gemma4:26b`). Re-benchmark under Ollama is required
+> before external recall claims; tracked in `TODOS.md` P1.
+> Dataset depth (5 prompts / 7 spans) is also too thin for a real
+> benchmark — same P1 item expands to 100+ prompts.
+
 Benchmark date: 2026-04-20
 Dataset: `eval/sample_benchmark.jsonl` (5 entries, 7 ground-truth spans)
 Hardware: Apple M5 laptop, 32 GB unified memory
