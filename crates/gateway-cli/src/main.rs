@@ -1,3 +1,4 @@
+mod canary;
 mod demo;
 mod doctor;
 mod verify;
@@ -28,6 +29,10 @@ enum Commands {
     /// Does NOT contact Rekor — point `rekor-cli` at the rekor_uuid in
     /// the receipt for that.
     Verify(verify::VerifyArgs),
+    /// Manage canary fingerprint baselines. `bootstrap` captures a
+    /// fresh baseline from the upstream; `show` pretty-prints an
+    /// existing one.
+    Canary(canary::CanaryArgs),
 }
 
 #[tokio::main]
@@ -56,6 +61,12 @@ async fn main() {
         }
         Commands::Verify(args) => {
             if let Err(e) = verify::run(args) {
+                eprintln!("{e}");
+                std::process::exit(1);
+            }
+        }
+        Commands::Canary(args) => {
+            if let Err(e) = canary::run(args) {
                 eprintln!("{e}");
                 std::process::exit(1);
             }

@@ -1,3 +1,4 @@
+pub mod canary;
 pub mod format;
 pub mod handler;
 pub mod metrics;
@@ -10,6 +11,7 @@ pub mod state;
 pub mod transparency;
 pub mod warmup;
 
+pub use canary::status_handler as canary_status_handler;
 pub use handler::handle_proxy_request;
 pub use metrics::metrics_handler;
 pub use privacy_api::{anonymize, deanonymize};
@@ -31,6 +33,7 @@ pub fn build_server(state: AppState) -> axum::Router {
         .route("/v1/deanonymize", post(deanonymize))
         .route("/v1/receipts/{id}", get(receipts_handler))
         .route("/v1/transparency/head", get(transparency_head_handler))
+        .route("/v1/canary/status", get(canary_status_handler))
         .route("/metrics", get(metrics_handler))
         .route("/ready", get(ready_handler))
         .fallback(handle_proxy_request)
