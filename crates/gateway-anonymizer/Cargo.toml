@@ -19,8 +19,10 @@ regex.workspace = true
 ollama-rs.workspace = true
 async-trait.workspace = true
 rusqlite.workspace = true
+fs2 = "0.4"
 
 [dev-dependencies]
 assert_matches.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 tempfile = "3"
+futures-util = "0.3"

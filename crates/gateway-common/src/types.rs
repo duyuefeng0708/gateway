@@ -91,6 +91,14 @@ pub struct SessionMapping {
 }
 
 /// A single entry in the hash-chained audit trail.
+///
+/// `hash_recipe` controls how `hash` was computed. Legacy entries written
+/// before 2026-04-25 do not carry the field; deserialisation defaults
+/// missing values to `audit-v1` so they continue to verify under the
+/// original 5-field SHA-256 recipe. Entries written today use
+/// `audit-v2-canonical-json`, which authenticates every field except
+/// `hash` itself, eliminating the previous unauthenticated-field gap
+/// (Codex F2 + F3 from the 2026-04-25 plan-eng-review).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuditEntry {
     pub timestamp: DateTime<Utc>,
@@ -101,7 +109,21 @@ pub struct AuditEntry {
     pub privacy_score: u32,
     pub hash: String,
     pub prev_hash: String,
+    /// Identifier for the hashing scheme used to produce `hash`. Missing
+    /// in legacy on-disk entries (deserialises as `audit-v1`).
+    #[serde(default = "default_hash_recipe")]
+    pub hash_recipe: String,
 }
+
+pub(crate) fn default_hash_recipe() -> String {
+    "audit-v1".to_string()
+}
+
+/// Stable identifier for the canonical-JSON hash recipe shipped 2026-04-25.
+pub const HASH_RECIPE_V2_CANONICAL_JSON: &str = "audit-v2-canonical-json";
+
+/// Stable identifier for the legacy 5-field SHA-256 recipe.
+pub const HASH_RECIPE_V1: &str = "audit-v1";
 
 /// Privacy score for a single request (0-100).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]

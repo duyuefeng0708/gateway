@@ -1,6 +1,62 @@
 # TODOs
 
-Generated 2026-04-22 from `/plan-ceo-review`. Each item has a concrete revisit date.
+Generated 2026-04-22 from `/plan-ceo-review`. Updated 2026-04-25 with verifiability plan from `/plan-eng-review`. Each item has a concrete revisit date.
+
+---
+
+## P1 — Verifiability (planned 2026-04-25, three sequential PRs)
+
+### PR-A0: Harden existing audit.rs (~1 day CC)
+
+Pre-condition for PR-A1. Without this, PR-A1's security claim is hollow because the existing `verify_chain` only checks `prev_hash` adjacency without recomputing entry hashes (Codex F1), and the existing hash recipe ignores most entry fields (Codex F2).
+
+Changes in `crates/gateway-anonymizer/src/audit.rs`:
+1. **F1:** `verify_chain` recomputes every entry hash. Tests must mutate `privacy_score`, `pii_types`, and `hash` to confirm rejection.
+2. **F2:** `compute_hash` switches to canonical-JSON over the entire entry struct excluding only the `hash` field. All current and future fields authenticated.
+3. **F3:** Add `hash_recipe: String` to `AuditEntry`. Existing rows (no value) treated as `audit-v1`; new rows use `audit-v2-canonical-json`. Verifier picks recipe by field value. Mixed V1/V2 verification test required.
+4. **F4:** Add `verify_dir(path)` that walks daily files in lex order and confirms each file's first `prev_hash` equals the previous file's last `hash`. Test two-day chain + forked-first-entry rejection.
+5. **F5:** Single `Utc::now()` per `write_entry`, captured once. Used for both entry timestamp and filename. Test with injected clock at midnight boundary.
+6. **F6:** `file.sync_data()` after `writeln!`. Update README receipt-durability claim to match.
+7. **F7 (single-host only):** `audit.lock` exclusive file lock acquired in `AuditWriter::new`. Multi-replica coordination → P2 (see below).
+8. **F8:** New async `AuditHandle` with bounded `mpsc` channel + `spawn_blocking` writer task. Async handlers send entries, never block on file I/O. Backpressure semantics: full channel returns `AuditError::Backpressured`, propagates to a 503.
+
+### PR-A1: Receipts + Rekor anchor + verify CLI (~2 days CC)
+
+Depends on PR-A0. Adds the user-facing verifiability surface.
+
+1. **F11:** `AuditEntry` gains 6 model-routing fields, each populated honestly: `client_requested_model`, `gateway_selected_route`, `upstream_requested_model`, `upstream_reported_model`, `detector_fast_model`, `detector_deep_model`. The single ambiguous `claimed_model` field is gone.
+2. **F12:** `prompt_hmac` and `response_hmac` (HMAC-SHA-256, not bare SHA-256) plus `hmac_key_id`. Per-instance HMAC key in env. Verifier needs the key to confirm digests; without it, structural verification still works. Defeats confirmation attacks on candidate prompts.
+3. **F9:** Streaming responses get rolling `response_hmac` finalized at stream end. New field `response_hash_status: pending|final`. Non-streaming returns receipt inline; streaming stores it for later lookup by `receipt_id`.
+4. **F13:** `signing_key_id`, `signature_alg` fields. Verifier maintains a trust store and a revocation list. KMS signer backend → P2.
+5. **F14:** Rekor anchors **periodic signed checkpoints** (Merkle root over all entries since the last checkpoint), not every per-request receipt. `GATEWAY_REKOR_ANCHOR_INTERVAL` defaults to 15m. Drops Rekor load by ~100×.
+6. **F15:** Receipts include `anchor_status: not_yet_anchored|anchored|anchor_failed`, `rekor_uuid`, `log_index`, `integrated_time`, plus inclusion proof fields. CLI `gateway-cli verify` does offline signature/hash check first, then optional Rekor inclusion check.
+7. **F10:** README and CLI help language never says "attestation." Receipts are "tamper-evident records anchored to a public transparency log." The README explicitly lists what receipts do NOT prove (PII removal correctness, model authenticity, response integrity in transit).
+8. New axum routes via `lib.rs::build_server`: `GET /v1/receipts/{id}`, `GET /v1/transparency/head`.
+9. New module `gateway-cli/src/verify.rs` + subcommand registration in `gateway-cli/src/main.rs`.
+
+### PR-B: Canary fingerprint (~1 day CC)
+
+Depends on PR-A1 only for the dashboard tile location; otherwise independent.
+
+1. **F18:** Four feature ensemble (replacing the original spec, which included an infeasible top-token-distribution feature):
+   - normalized output similarity against checked-in expected fingerprints
+   - output token-count bucket
+   - stop-reason / tool-shape match
+   - latency bucket
+2. **F16:** Baseline is `eval/canary_baseline.json`, **checked into the repo**, generated and reviewed by the operator from known-good captures. New deployments start in **observation mode** (probe but don't gate) until manual quorum approval.
+3. **F19:** Probes pull from a prompt bank with daily-seeded selection, paraphrase templates, and ±20% interval jitter around the locked 15-minute default. Fixed-prompt fingerprinting becomes infeasible.
+4. **F17:** `/v1/canary/status` is admin-authenticated, rate-limited, and returns coarse states only: `healthy | degraded | unknown`. No per-feature scores or raw probe output. Defeats the feedback-oracle attack.
+5. New module `gateway-proxy/src/canary/` with `mod.rs`, `baseline.rs`, and `features/{output_similarity, length_bucket, stop_reason, latency_bucket}.rs`.
+6. New CLI subcommands: `gateway-cli canary bootstrap`, `gateway-cli canary accept-drift`.
+
+### TODOS deferred from this plan (P2)
+
+- **Multi-replica audit chain coordination.** Single-host file lock landed in PR-A0. Revisit when deploying >1 proxy replica per audit stream. Likely solution: dedicated audit-coordinator service or shared-storage with leases.
+- **KMS-backed signing key.** PR-A1 ships with file-or-env Ed25519 key. KMS/HSM signer is a small refactor to a `Signer` trait; revisit before any managed production deployment.
+- **Rekor sharding and batch policy.** PR-A1 ships periodic checkpoints which scale ~100× better than per-request. Revisit at >1M receipts/day or >10k instances.
+- **Receipt search by upstream_reported_model + time range.** Today receipts are looked up only by `receipt_id`. Operators may want to query "show all receipts where upstream returned a different model than requested in the last 24h." Index this when there's a real query.
+
+---
 
 ## P1 — Product Validity
 
