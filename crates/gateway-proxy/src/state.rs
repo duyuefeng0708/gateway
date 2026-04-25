@@ -8,6 +8,7 @@ use gateway_anonymizer::session::SessionStore;
 use gateway_common::config::GatewayConfig;
 use tokio::sync::Semaphore;
 
+use crate::canary::CanaryState;
 use crate::receipts::ReceiptCache;
 use crate::routing::Router;
 use crate::transparency::TransparencyState;
@@ -47,4 +48,9 @@ pub struct AppState {
     /// publisher task handle lives in main.rs and is detached for the
     /// lifetime of the process. PR-A1.5.
     pub transparency: TransparencyState,
+    /// Canary fingerprint state. Holds the loaded baseline, the rolling
+    /// window of recent probe scores, and the public health snapshot
+    /// surface. Cheap to clone. The probe loop is spawned in main.rs.
+    /// PR-B.
+    pub canary: CanaryState,
 }

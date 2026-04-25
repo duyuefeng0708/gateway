@@ -11,6 +11,7 @@ use gateway_proxy::metrics;
 use gateway_proxy::receipts::ReceiptCache;
 use gateway_proxy::routing::Router as SmartRouter;
 use gateway_proxy::state::AppState;
+use gateway_proxy::canary::CanaryState;
 use gateway_proxy::transparency::TransparencyState;
 use tokio::sync::Semaphore;
 use tracing::info;
@@ -100,6 +101,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "transparency anchor publisher started"
     );
 
+    // Canary fingerprint state. Loaded from GATEWAY_CANARY_BASELINE if
+    // set, else `eval/canary_baseline.json`, else a stub baseline that
+    // makes the canary report `unknown` forever (intentional — no
+    // baseline means no comparison, and we don't want to gate boot on
+    // a file the operator hasn't generated yet).
+    let canary = load_canary_state();
+    let _canary_probe_handle = canary.clone().spawn_probe();
+
     let listen_addr = config.listen_addr.clone();
     let detection_concurrency = config.detection_concurrency;
 
@@ -115,6 +124,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         hmac: Arc::new(hmac),
         receipts,
         transparency,
+        canary,
     };
 
     let app = gateway_proxy::build_server(app_state.clone());
@@ -157,4 +167,36 @@ fn load_hmac_context() -> Result<HmacContext, Box<dyn std::error::Error>> {
     };
     let key_id = std::env::var("GATEWAY_HMAC_KEY_ID").unwrap_or_else(|_| "primary".to_string());
     HmacContext::from_hex(key_hex.trim(), key_id).map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+}
+
+/// Load canary state from a baseline file or fall back to a stub.
+///
+/// The stub keeps the canary surface alive (status endpoint returns
+/// `unknown`, probe loop logs every interval) without forcing operators
+/// to generate a baseline before first boot. Run `gateway-cli canary
+/// bootstrap` against a known-good upstream to produce the real file.
+fn load_canary_state() -> CanaryState {
+    let custom = std::env::var("GATEWAY_CANARY_BASELINE").ok();
+    let path = custom
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("eval/canary_baseline.json"));
+
+    match CanaryState::from_baseline_path(path.clone()) {
+        Ok(state) => {
+            info!(
+                baseline = %path.display(),
+                model = %state.baseline().model_label,
+                interval_secs = state.interval_secs(),
+                "canary baseline loaded"
+            );
+            state
+        }
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "canary baseline not loaded; running with empty baseline (status will be 'unknown'). Generate one via 'gateway-cli canary bootstrap'."
+            );
+            CanaryState::stub()
+        }
+    }
 }

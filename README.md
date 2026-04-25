@@ -274,6 +274,61 @@ gateway_transparency_last_publish_age_seconds gauge  # staleness
 
 Operators should alert on `gateway_transparency_last_publish_age_seconds` exceeding ~3x the configured anchor interval. Persistent failures usually mean Rekor public-good is degraded; the local chain stays valid in the meantime.
 
+## Canary fingerprint
+
+A second verifiability layer (PR-B in the roadmap): periodically compare the upstream's responses against a fingerprint of a known-good Anthropic session. Drift in any of four signals — output similarity, response length bucket, stop reason, latency bucket — collapses the aggregate confidence and flips `GET /v1/canary/status` to `degraded`. Designed to detect silent upstream model swaps within ~5 minutes (per Codex F18).
+
+The runtime probe payload (live HTTP calls against the upstream) lands in PR-B.1; this PR ships the framework: feature scoring, baseline file format, status surface, and the `gateway canary` CLI. The probe loop runs on schedule but is a no-op until PR-B.1 wires the live request.
+
+### Status endpoint
+
+```
+GET /v1/canary/status
+
+{
+  "health": "healthy",                   // healthy | degraded | unknown
+  "last_probe_at": "2026-04-25T19:30:00Z",
+  "probes_in_window": 8,
+  "baseline_model_label": "claude-sonnet-4-20250514"
+}
+```
+
+`health` is **coarse on purpose** — Codex F17 flagged that exposing per-feature scores or raw probe output here would let an attacker tune a spoof. Operators who need detail consult the metrics surface (`gateway_upstream_fingerprint_confidence` gauge, future PR-B.1) or the local logs.
+
+### Bootstrap a baseline
+
+The repo ships an empty placeholder at `eval/canary_baseline.json` so a fresh boot doesn't fail loud. Generate a real baseline by running `gateway canary bootstrap` against your known-good upstream:
+
+```bash
+# Stub mode (PR-B): captures the prompt bank with synthetic fingerprints.
+gateway canary bootstrap --model-label claude-sonnet-4-20250514 --stub --output eval/canary_baseline.json
+
+# (PR-B.1) Real bootstrap will hit the configured upstream:
+gateway canary bootstrap --model-label claude-sonnet-4-20250514
+```
+
+Operators **must review the generated file** before checking it in. Codex F16 explicitly rejects auto-trust of bootstrap output: a man-in-the-middle present at bootstrap would poison the fingerprint silently.
+
+```bash
+# Sanity-check what's in the baseline.
+gateway canary show
+gateway canary show --path eval/canary_baseline.json
+```
+
+### Configuration
+
+| Variable | Default | Description |
+|---|---|---|
+| `GATEWAY_CANARY_BASELINE` | `eval/canary_baseline.json` | Path to the baseline file. |
+| `GATEWAY_CANARY_INTERVAL` | `900` (15 minutes) | Probe interval in seconds. Cost: at Sonnet pricing roughly $12/month per gateway instance. |
+
+### What the canary catches and what it doesn't
+
+* **Catches:** silent upstream URL changes, unannounced model swaps (Sonnet → Haiku), service-layer regressions that flip stop_reason behaviour, latency bucket shifts that suggest provider-side throttling.
+* **Doesn't catch:** subtle distillation / fine-tuning changes that preserve all four feature buckets, intra-provider routing tweaks within the same model family, output drift narrower than the bucket boundaries.
+
+The canary is probabilistic — strong but not cryptographic. Combined with the receipt chain (which IS cryptographic for what it covers), the verifiability story has both a public-log layer and a model-identity layer.
+
 ## Configuration
 
 All settings are configured via environment variables.
