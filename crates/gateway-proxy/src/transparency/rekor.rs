@@ -29,7 +29,9 @@
 
 use serde_json::{json, Value};
 
-use crate::transparency::state::{merkle_root_hex, pem_to_base64, signature_to_base64, PublishError};
+use crate::transparency::state::{
+    merkle_root_hex, pem_to_base64, signature_to_base64, PublishError,
+};
 
 /// Endpoint Rekor exposes for new entries.
 const ENTRIES_PATH: &str = "/api/v1/log/entries";
@@ -166,8 +168,7 @@ mod tests {
     fn build_body_has_expected_shape() {
         let root = [9u8; 32];
         let sig = [3u8; 64];
-        let pem =
-            "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA\n-----END PUBLIC KEY-----\n";
+        let pem = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA\n-----END PUBLIC KEY-----\n";
         let body = build_hashedrekord_body(&root, &sig, pem);
         assert_eq!(body["kind"], "hashedrekord");
         assert_eq!(body["apiVersion"], "0.0.1");

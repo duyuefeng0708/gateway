@@ -14,8 +14,9 @@ static PROM_HANDLE: OnceLock<PrometheusHandle> = OnceLock::new();
 /// Custom histogram buckets for deep-tier latency. Default Prometheus buckets
 /// top out around 10 seconds which is useless for a 86-second laptop Gemma-26B
 /// run. These cover 100ms through 5 minutes honestly.
-const DEEP_TIER_LATENCY_BUCKETS: &[f64] =
-    &[0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0, 90.0, 120.0, 180.0, 300.0];
+const DEEP_TIER_LATENCY_BUCKETS: &[f64] = &[
+    0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0, 90.0, 120.0, 180.0, 300.0,
+];
 
 /// Install the Prometheus metrics recorder. Call once before the server starts.
 /// Returns `Err` if a recorder is already installed (e.g. in tests that run

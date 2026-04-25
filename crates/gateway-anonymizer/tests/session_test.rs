@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use gateway_anonymizer::session::SessionStore;
-use gateway_common::types::{Placeholder, PiiType};
+use gateway_common::types::{PiiType, Placeholder};
 
 #[tokio::test]
 async fn store_and_lookup_single_placeholder() {
@@ -21,7 +21,10 @@ async fn store_and_lookup_all() {
     let p1 = Placeholder::new(PiiType::Person, "Alice".into());
     let p2 = Placeholder::new(PiiType::Email, "alice@example.com".into());
 
-    store.store("sess-2", &[p1.clone(), p2.clone()]).await.unwrap();
+    store
+        .store("sess-2", &[p1.clone(), p2.clone()])
+        .await
+        .unwrap();
 
     let all = store.lookup_all("sess-2").await.unwrap();
     assert_eq!(all.len(), 2);
@@ -34,7 +37,10 @@ async fn store_and_lookup_all() {
 #[tokio::test]
 async fn lookup_missing_placeholder_returns_none() {
     let store = SessionStore::in_memory().await.unwrap();
-    let result = store.lookup("nonexistent", "[PERSON_00000000]").await.unwrap();
+    let result = store
+        .lookup("nonexistent", "[PERSON_00000000]")
+        .await
+        .unwrap();
     assert_eq!(result, None);
 }
 
@@ -67,7 +73,10 @@ async fn cleanup_expired_preserves_recent_entries() {
     store.store("recent-sess", &[p]).await.unwrap();
 
     // With a large TTL nothing should be deleted.
-    let deleted = store.cleanup_expired(Duration::from_secs(86400)).await.unwrap();
+    let deleted = store
+        .cleanup_expired(Duration::from_secs(86400))
+        .await
+        .unwrap();
     assert_eq!(deleted, 0);
 
     let all = store.lookup_all("recent-sess").await.unwrap();

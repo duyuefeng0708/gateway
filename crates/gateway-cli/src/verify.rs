@@ -37,10 +37,10 @@ pub struct VerifyArgs {
 }
 
 pub fn run(args: VerifyArgs) -> Result<(), VerifyError> {
-    let raw =
-        fs::read_to_string(&args.path).map_err(|e| VerifyError::Read(args.path.clone(), e.to_string()))?;
-    let entry: AuditEntry = serde_json::from_str(&raw)
-        .map_err(|e| VerifyError::Parse(e.to_string()))?;
+    let raw = fs::read_to_string(&args.path)
+        .map_err(|e| VerifyError::Read(args.path.clone(), e.to_string()))?;
+    let entry: AuditEntry =
+        serde_json::from_str(&raw).map_err(|e| VerifyError::Parse(e.to_string()))?;
 
     println!("Verifying receipt for request_id: {}", entry.request_id);
     println!("  Hash recipe: {}", entry.hash_recipe);
@@ -48,8 +48,8 @@ pub fn run(args: VerifyArgs) -> Result<(), VerifyError> {
     println!("  Chain hash:  {}", short(&entry.hash));
 
     // 1. Recompute the entry hash and confirm it matches.
-    let recomputed = audit::compute_hash(&entry)
-        .map_err(|e| VerifyError::HashCompute(e.to_string()))?;
+    let recomputed =
+        audit::compute_hash(&entry).map_err(|e| VerifyError::HashCompute(e.to_string()))?;
     if recomputed != entry.hash {
         return Err(VerifyError::HashMismatch {
             stored: entry.hash.clone(),

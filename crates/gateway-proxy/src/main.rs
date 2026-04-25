@@ -7,11 +7,11 @@ use gateway_anonymizer::hmac_digest::HmacContext;
 use gateway_anonymizer::session::SessionStore;
 use gateway_anonymizer::tiered::TieredDetector;
 use gateway_common::config::GatewayConfig;
+use gateway_proxy::canary::{CanaryState, ProbeRunner};
 use gateway_proxy::metrics;
 use gateway_proxy::receipts::ReceiptCache;
 use gateway_proxy::routing::Router as SmartRouter;
 use gateway_proxy::state::AppState;
-use gateway_proxy::canary::{CanaryState, ProbeRunner};
 use gateway_proxy::transparency::TransparencyState;
 use tokio::sync::Semaphore;
 use tracing::info;
@@ -27,12 +27,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     // Initialize Prometheus metrics recorder.
-    metrics::init_metrics()
-        .map_err(|e| format!("metrics initialization failed: {e}"))?;
+    metrics::init_metrics().map_err(|e| format!("metrics initialization failed: {e}"))?;
 
     // Parse configuration from environment.
-    let config = GatewayConfig::from_env()
-        .map_err(|e| format!("configuration error: {e}"))?;
+    let config = GatewayConfig::from_env().map_err(|e| format!("configuration error: {e}"))?;
 
     // Initialize session store (SQLite).
     let session_store = SessionStore::new(&config.db_path)
@@ -161,13 +159,13 @@ fn load_hmac_context() -> Result<HmacContext, Box<dyn std::error::Error>> {
             let path = std::env::var("GATEWAY_HMAC_KEY_FILE").map_err(|_| {
                 "missing receipt-digest key: set GATEWAY_HMAC_KEY (hex) or GATEWAY_HMAC_KEY_FILE"
             })?;
-            std::fs::read_to_string(&path).map_err(|e| {
-                format!("failed to read GATEWAY_HMAC_KEY_FILE {path}: {e}")
-            })?
+            std::fs::read_to_string(&path)
+                .map_err(|e| format!("failed to read GATEWAY_HMAC_KEY_FILE {path}: {e}"))?
         }
     };
     let key_id = std::env::var("GATEWAY_HMAC_KEY_ID").unwrap_or_else(|_| "primary".to_string());
-    HmacContext::from_hex(key_hex.trim(), key_id).map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+    HmacContext::from_hex(key_hex.trim(), key_id)
+        .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
 }
 
 /// Build a [`ProbeRunner`] for the canary loop, or `None` if the live

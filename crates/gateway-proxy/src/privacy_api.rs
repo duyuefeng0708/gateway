@@ -63,7 +63,9 @@ pub async fn anonymize(
     State(state): State<AppState>,
     axum::Json(body): axum::Json<AnonymizeRequest>,
 ) -> Result<Response, Response> {
-    anonymize_inner(state, body).await.map_err(|e| e.into_response())
+    anonymize_inner(state, body)
+        .await
+        .map_err(|e| e.into_response())
 }
 
 async fn anonymize_inner(
@@ -90,10 +92,14 @@ async fn anonymize_inner(
 
     // Run PII detection.
     debug!(session_id = %session_id, "running PII detection for /v1/anonymize");
-    let spans = state.detector.detect(&text).await.map_err(|e| ErrorResponse {
-        status: StatusCode::SERVICE_UNAVAILABLE,
-        message: format!("detection failed: {e}"),
-    })?;
+    let spans = state
+        .detector
+        .detect(&text)
+        .await
+        .map_err(|e| ErrorResponse {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            message: format!("detection failed: {e}"),
+        })?;
 
     // Compute privacy score.
     let privacy_score = PrivacyScore::compute(&spans);

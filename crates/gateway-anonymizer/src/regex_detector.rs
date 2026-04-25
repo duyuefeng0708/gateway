@@ -85,9 +85,9 @@ impl PiiDetector for RegexDetector {
         // match inside a URL-credential match).
         let mut deduped: Vec<PiiSpan> = Vec::with_capacity(results.len());
         for span in results {
-            let dominated = deduped.iter().any(|existing| {
-                existing.start <= span.start && span.end <= existing.end
-            });
+            let dominated = deduped
+                .iter()
+                .any(|existing| existing.start <= span.start && span.end <= existing.end);
             if !dominated {
                 deduped.push(span);
             }

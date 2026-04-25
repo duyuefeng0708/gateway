@@ -80,7 +80,11 @@ pub struct BootstrapArgs {
     pub stub: bool,
     /// Upstream URL. Defaults to `GATEWAY_UPSTREAM` env var, then
     /// `https://api.anthropic.com`.
-    #[arg(long, env = "GATEWAY_UPSTREAM", default_value = "https://api.anthropic.com")]
+    #[arg(
+        long,
+        env = "GATEWAY_UPSTREAM",
+        default_value = "https://api.anthropic.com"
+    )]
     pub upstream: String,
     /// Anthropic API key. Defaults to `ANTHROPIC_API_KEY` env var. Not
     /// required for `--stub` mode.
@@ -139,21 +143,17 @@ async fn bootstrap(args: BootstrapArgs) -> Result<(), CanaryError> {
         let upstream = args.upstream.trim_end_matches('/').to_string();
 
         for prompt in PROMPT_BANK {
-            let fp = capture_fingerprint(
-                &client,
-                &upstream,
-                &api_key,
-                &args.model_label,
-                prompt,
-            )
-            .await
-            .map_err(|e| CanaryError::Probe(prompt.to_string(), e.to_string()))?;
+            let fp = capture_fingerprint(&client, &upstream, &api_key, &args.model_label, prompt)
+                .await
+                .map_err(|e| CanaryError::Probe(prompt.to_string(), e.to_string()))?;
             baseline.prompts.insert(prompt.to_string(), fp);
         }
     }
 
-    let json = serde_json::to_string_pretty(&baseline).map_err(|e| CanaryError::Serialize(e.to_string()))?;
-    fs::write(&args.output, json).map_err(|e| CanaryError::Write(args.output.clone(), e.to_string()))?;
+    let json = serde_json::to_string_pretty(&baseline)
+        .map_err(|e| CanaryError::Serialize(e.to_string()))?;
+    fs::write(&args.output, json)
+        .map_err(|e| CanaryError::Write(args.output.clone(), e.to_string()))?;
 
     println!("Baseline written to {}", args.output.display());
     println!("Model label: {}", baseline.model_label);
@@ -307,7 +307,12 @@ mod tests {
         }
     }
 
-    fn live_args(out: PathBuf, label: &str, upstream: String, api_key: Option<String>) -> BootstrapArgs {
+    fn live_args(
+        out: PathBuf,
+        label: &str,
+        upstream: String,
+        api_key: Option<String>,
+    ) -> BootstrapArgs {
         BootstrapArgs {
             output: out,
             model_label: label.to_string(),

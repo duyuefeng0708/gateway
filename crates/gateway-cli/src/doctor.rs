@@ -30,8 +30,8 @@ pub async fn run_checks() -> DoctorReport {
     let ollama_url = env_or("GATEWAY_OLLAMA_URL", "http://localhost:11434");
     let fast_model = env_or("GATEWAY_FAST_MODEL", "gemma4:e4b");
     let deep_model = env_or("GATEWAY_DEEP_MODEL", "gemma4:26b");
-    let scan_mode = ScanMode::from_str(&env_or("GATEWAY_SCAN_MODE", "fast"))
-        .unwrap_or(ScanMode::Fast);
+    let scan_mode =
+        ScanMode::from_str(&env_or("GATEWAY_SCAN_MODE", "fast")).unwrap_or(ScanMode::Fast);
     let db_path = env_or("GATEWAY_DB_PATH", "./data/sessions.db");
     let upstream_url = env_or("GATEWAY_UPSTREAM", "https://api.anthropic.com");
     let audit_path = env_or("GATEWAY_AUDIT_PATH", "./data/audit/");
@@ -44,8 +44,7 @@ pub async fn run_checks() -> DoctorReport {
         ScanMode::Fast => None,
     };
 
-    let (ollama_check, model_checks) =
-        check_ollama(&ollama_url, &fast_model, deep_model_arg).await;
+    let (ollama_check, model_checks) = check_ollama(&ollama_url, &fast_model, deep_model_arg).await;
 
     let mut checks = vec![ollama_check];
     checks.extend(model_checks);
@@ -335,9 +334,15 @@ pub fn print_report(report: &DoctorReport) {
     println!("Gateway Health Check");
     for check in &report.checks {
         if check.passed {
-            println!("  \x1b[32m\u{2713}\x1b[0m {} ({})", check.name, check.detail);
+            println!(
+                "  \x1b[32m\u{2713}\x1b[0m {} ({})",
+                check.name, check.detail
+            );
         } else {
-            println!("  \x1b[31m\u{2717}\x1b[0m {} ({})", check.name, check.detail);
+            println!(
+                "  \x1b[31m\u{2717}\x1b[0m {} ({})",
+                check.name, check.detail
+            );
         }
     }
     println!();

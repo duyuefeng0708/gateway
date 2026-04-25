@@ -142,14 +142,15 @@ async fn rekor_request_body_matches_hashedrekord_schema() {
         .expect("wiremock recorded requests");
     assert_eq!(received.len(), 1);
     let req = &received[0];
-    let body: serde_json::Value =
-        serde_json::from_slice(&req.body).expect("body parses as JSON");
+    let body: serde_json::Value = serde_json::from_slice(&req.body).expect("body parses as JSON");
 
     assert_eq!(body["kind"], "hashedrekord");
     assert_eq!(body["apiVersion"], "0.0.1");
     let spec = &body["spec"];
 
-    let sig_b64 = spec["signature"]["content"].as_str().expect("sig is string");
+    let sig_b64 = spec["signature"]["content"]
+        .as_str()
+        .expect("sig is string");
     let sig = base64::engine::general_purpose::STANDARD
         .decode(sig_b64)
         .expect("signature base64 decodes");

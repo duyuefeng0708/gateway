@@ -123,10 +123,26 @@ fn build_state(
         router: gateway_proxy::Router::default_router(),
         warm: Arc::new(AtomicBool::new(true)),
         detection_semaphore: Arc::new(Semaphore::new(concurrency)),
-        audit: gateway_anonymizer::audit::AuditHandle::spawn(tempfile::tempdir().unwrap().keep()).unwrap(),
-        hmac: Arc::new(gateway_anonymizer::hmac_digest::HmacContext::from_hex("0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20", "test").unwrap()),
-        receipts: Arc::new(gateway_proxy::receipts::ReceiptCache::with_default_capacity(tempfile::tempdir().unwrap().keep())),
-        transparency: gateway_proxy::transparency::TransparencyState::from_parts(ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]), "test".to_string(), "http://unused".to_string(), std::time::Duration::from_secs(900)),
+        audit: gateway_anonymizer::audit::AuditHandle::spawn(tempfile::tempdir().unwrap().keep())
+            .unwrap(),
+        hmac: Arc::new(
+            gateway_anonymizer::hmac_digest::HmacContext::from_hex(
+                "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+                "test",
+            )
+            .unwrap(),
+        ),
+        receipts: Arc::new(
+            gateway_proxy::receipts::ReceiptCache::with_default_capacity(
+                tempfile::tempdir().unwrap().keep(),
+            ),
+        ),
+        transparency: gateway_proxy::transparency::TransparencyState::from_parts(
+            ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]),
+            "test".to_string(),
+            "http://unused".to_string(),
+            std::time::Duration::from_secs(900),
+        ),
         canary: gateway_proxy::canary::CanaryState::stub(),
     }
 }
@@ -135,9 +151,7 @@ fn futures_block_on<F: std::future::Future>(fut: F) -> F::Output {
     // Only used for the session-store factory which is async. The outer
     // test is #[tokio::test] so we don't need a separate runtime; this
     // helper is a thin wrapper so `build_state` stays synchronous.
-    tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(fut)
-    })
+    tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(fut))
 }
 
 fn many_message_body(n: usize) -> String {

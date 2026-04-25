@@ -331,7 +331,9 @@ impl std::str::FromStr for ScanMode {
             "fast" => Ok(Self::Fast),
             "deep" => Ok(Self::Deep),
             "auto" => Ok(Self::Auto),
-            other => Err(format!("invalid scan mode: {other}. expected: fast, deep, auto")),
+            other => Err(format!(
+                "invalid scan mode: {other}. expected: fast, deep, auto"
+            )),
         }
     }
 }

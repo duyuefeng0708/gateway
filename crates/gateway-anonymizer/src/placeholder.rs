@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use gateway_common::types::{Placeholder, PiiSpan};
+use gateway_common::types::{PiiSpan, Placeholder};
 use regex::Regex;
 
 /// Replace PII spans in `text` with UUID-based placeholders.
@@ -111,9 +111,7 @@ fn find_non_overlapping(
         let rel = haystack[search_from..].find(needle)?;
         let start = search_from + rel;
         let end = start + needle.len();
-        let overlaps = claimed
-            .iter()
-            .any(|&(cs, ce)| start < ce && cs < end);
+        let overlaps = claimed.iter().any(|&(cs, ce)| start < ce && cs < end);
         if !overlaps {
             return Some((start, end));
         }
@@ -138,10 +136,8 @@ pub fn restore(text: &str, placeholders: &[Placeholder]) -> String {
         .map(|p| (p.placeholder_text.as_str(), p.original_text.as_str()))
         .collect();
 
-    let pattern = Regex::new(
-        r"\[(PERSON|ORG|EMAIL|LOCATION|PHONE|SSN|CREDENTIAL)_[a-f0-9]{8}\]",
-    )
-    .expect("hardcoded regex must compile");
+    let pattern = Regex::new(r"\[(PERSON|ORG|EMAIL|LOCATION|PHONE|SSN|CREDENTIAL)_[a-f0-9]{8}\]")
+        .expect("hardcoded regex must compile");
 
     pattern
         .replace_all(text, |caps: &regex::Captures| {

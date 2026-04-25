@@ -52,10 +52,26 @@ async fn test_state() -> gateway_proxy::AppState {
         router: gateway_proxy::Router::default_router(),
         warm: Arc::new(std::sync::atomic::AtomicBool::new(true)),
         detection_semaphore: Arc::new(tokio::sync::Semaphore::new(2)),
-        audit: gateway_anonymizer::audit::AuditHandle::spawn(tempfile::tempdir().unwrap().keep()).unwrap(),
-        hmac: Arc::new(gateway_anonymizer::hmac_digest::HmacContext::from_hex("0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20", "test").unwrap()),
-        receipts: Arc::new(gateway_proxy::receipts::ReceiptCache::with_default_capacity(tempfile::tempdir().unwrap().keep())),
-        transparency: gateway_proxy::transparency::TransparencyState::from_parts(ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]), "test".to_string(), "http://unused".to_string(), std::time::Duration::from_secs(900)),
+        audit: gateway_anonymizer::audit::AuditHandle::spawn(tempfile::tempdir().unwrap().keep())
+            .unwrap(),
+        hmac: Arc::new(
+            gateway_anonymizer::hmac_digest::HmacContext::from_hex(
+                "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+                "test",
+            )
+            .unwrap(),
+        ),
+        receipts: Arc::new(
+            gateway_proxy::receipts::ReceiptCache::with_default_capacity(
+                tempfile::tempdir().unwrap().keep(),
+            ),
+        ),
+        transparency: gateway_proxy::transparency::TransparencyState::from_parts(
+            ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]),
+            "test".to_string(),
+            "http://unused".to_string(),
+            std::time::Duration::from_secs(900),
+        ),
         canary: gateway_proxy::canary::CanaryState::stub(),
     }
 }
@@ -186,7 +202,10 @@ async fn deanonymize_with_valid_session_restores_text() {
     assert_eq!(restored, "Contact alice@example.com please.");
 
     let replaced = de_json["placeholders_replaced"].as_u64().unwrap();
-    assert!(replaced >= 1, "expected at least 1 placeholder replaced, got: {replaced}");
+    assert!(
+        replaced >= 1,
+        "expected at least 1 placeholder replaced, got: {replaced}"
+    );
 }
 
 #[tokio::test]
@@ -213,7 +232,10 @@ async fn round_trip_anonymize_then_deanonymize() {
 
     let anon_json = body_json(resp).await;
     let anonymized = anon_json["anonymized"].as_str().unwrap();
-    assert_eq!(anon_json["session_id"].as_str().unwrap(), "round-trip-session");
+    assert_eq!(
+        anon_json["session_id"].as_str().unwrap(),
+        "round-trip-session"
+    );
 
     // The anonymized text should not contain original PII.
     assert!(!anonymized.contains("123-45-6789"));
@@ -261,7 +283,10 @@ async fn anonymize_with_no_pii_returns_score_100_and_original_text() {
     assert_eq!(resp.status(), StatusCode::OK);
 
     let json = body_json(resp).await;
-    assert_eq!(json["anonymized"].as_str().unwrap(), "The weather is nice today.");
+    assert_eq!(
+        json["anonymized"].as_str().unwrap(),
+        "The weather is nice today."
+    );
     assert_eq!(json["score"].as_u64().unwrap(), 100);
     assert_eq!(json["classification"].as_str().unwrap(), "LOW");
     assert!(json["spans"].as_array().unwrap().is_empty());
@@ -289,7 +314,10 @@ async fn deanonymize_with_unknown_session_returns_404() {
 
     let json = body_json(resp).await;
     assert!(
-        json["error"].as_str().unwrap().contains("session not found"),
+        json["error"]
+            .as_str()
+            .unwrap()
+            .contains("session not found"),
         "expected session not found error, got: {}",
         json["error"]
     );

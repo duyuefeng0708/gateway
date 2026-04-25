@@ -110,7 +110,12 @@ impl ProbeRunner {
         api_key: String,
         state: CanaryState,
     ) -> Self {
-        Self { http_client, upstream_url, api_key, state }
+        Self {
+            http_client,
+            upstream_url,
+            api_key,
+            state,
+        }
     }
 
     /// Run a single cycle. Picks today's prompt for slot `cycle`, sends
@@ -244,7 +249,11 @@ mod tests {
         for cycle in 0..prompts.len() as u64 {
             seen.insert(pick_prompt(&prompts, seed, cycle).unwrap());
         }
-        assert_eq!(seen.len(), prompts.len(), "all prompts visited within one day's cycle");
+        assert_eq!(
+            seen.len(),
+            prompts.len(),
+            "all prompts visited within one day's cycle"
+        );
     }
 
     #[test]
@@ -259,7 +268,10 @@ mod tests {
         let order_seed_2: Vec<&str> = (0..prompts.len() as u64)
             .map(|c| pick_prompt(&prompts, 2, c).unwrap())
             .collect();
-        assert_ne!(order_seed_1, order_seed_2, "different seeds give different orders");
+        assert_ne!(
+            order_seed_1, order_seed_2,
+            "different seeds give different orders"
+        );
     }
 
     #[test]
@@ -435,7 +447,10 @@ mod tests {
             "key".to_string(),
             state,
         );
-        let err = runner.probe_once("unknown").await.expect_err("missing prompt");
+        let err = runner
+            .probe_once("unknown")
+            .await
+            .expect_err("missing prompt");
         assert!(matches!(err, ProbeError::PromptNotInBaseline(_)));
     }
 

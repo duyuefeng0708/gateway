@@ -14,7 +14,10 @@ use gateway_common::types::{PiiSpan, PiiType};
 #[tokio::test]
 async fn regex_detects_email() {
     let det = RegexDetector::new();
-    let spans = det.detect("Send to alice@example.com please").await.unwrap();
+    let spans = det
+        .detect("Send to alice@example.com please")
+        .await
+        .unwrap();
     assert_eq!(spans.len(), 1);
     assert_eq!(spans[0].pii_type, PiiType::Email);
     assert_eq!(spans[0].text, "alice@example.com");
@@ -42,7 +45,10 @@ async fn regex_detects_phone() {
 #[tokio::test]
 async fn regex_clean_text_empty() {
     let det = RegexDetector::new();
-    let spans = det.detect("Just a regular sentence about nothing sensitive.").await.unwrap();
+    let spans = det
+        .detect("Just a regular sentence about nothing sensitive.")
+        .await
+        .unwrap();
     assert!(spans.is_empty());
 }
 
@@ -195,8 +201,16 @@ async fn eval_computes_correct_metrics() {
     // First entry: regex should find the email => TP=1.
     // Second entry: no PII expected and none detected => perfect.
     assert_eq!(report.total_entries, 2);
-    assert!(report.overall.recall >= 0.99, "recall should be ~1.0: {}", report.overall.recall);
-    assert!(report.overall.precision >= 0.99, "precision should be ~1.0: {}", report.overall.precision);
+    assert!(
+        report.overall.recall >= 0.99,
+        "recall should be ~1.0: {}",
+        report.overall.recall
+    );
+    assert!(
+        report.overall.precision >= 0.99,
+        "precision should be ~1.0: {}",
+        report.overall.precision
+    );
 }
 
 #[tokio::test]

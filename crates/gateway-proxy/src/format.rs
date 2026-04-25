@@ -27,7 +27,10 @@ pub fn detect_format(path: &str) -> ApiFormat {
 /// Both Anthropic and OpenAI formats store user messages under
 /// `body["messages"][i]["content"]` as a plain string, but the response
 /// structures differ. This function handles the request side.
-pub fn extract_messages(body: &Value, format: ApiFormat) -> Result<Vec<(usize, String)>, GatewayError> {
+pub fn extract_messages(
+    body: &Value,
+    format: ApiFormat,
+) -> Result<Vec<(usize, String)>, GatewayError> {
     let messages = body
         .get("messages")
         .and_then(Value::as_array)
@@ -231,10 +234,7 @@ mod tests {
             "[PERSON_abc12345] greeting"
         );
         // Unmodified message stays the same.
-        assert_eq!(
-            body["messages"][1]["content"].as_str().unwrap(),
-            "Hello"
-        );
+        assert_eq!(body["messages"][1]["content"].as_str().unwrap(), "Hello");
     }
 
     #[test]

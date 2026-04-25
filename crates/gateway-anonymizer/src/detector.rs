@@ -16,10 +16,7 @@ pub trait PiiDetector: Send + Sync {
     /// Run detection and return a `DetectionResult` carrying tier-visibility
     /// metadata. Default impl wraps `detect()` with no-tier metadata; tiered
     /// implementations should override.
-    async fn detect_with_metadata(
-        &self,
-        text: &str,
-    ) -> Result<DetectionResult, DetectionError> {
+    async fn detect_with_metadata(&self, text: &str) -> Result<DetectionResult, DetectionError> {
         let spans = self.detect(text).await?;
         Ok(DetectionResult {
             spans,

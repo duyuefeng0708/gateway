@@ -48,7 +48,10 @@ impl ReceiptCache {
     }
 
     pub fn with_default_capacity(audit_dir: PathBuf) -> Self {
-        Self::new(audit_dir, NonZeroUsize::new(10_000).expect("non-zero literal"))
+        Self::new(
+            audit_dir,
+            NonZeroUsize::new(10_000).expect("non-zero literal"),
+        )
     }
 
     /// Insert a receipt (called after every successful audit write).
@@ -109,10 +112,7 @@ struct ReceiptBody<'a> {
 ///
 /// Returns 200 with the receipt JSON on cache hit OR disk hit.
 /// Returns 404 with a plain-text body when the id is not found.
-pub async fn receipts_handler(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> Response {
+pub async fn receipts_handler(State(state): State<AppState>, Path(id): Path<String>) -> Response {
     if let Some(entry) = state.receipts.get(&id) {
         return Json(ReceiptBody { entry: &entry }).into_response();
     }
@@ -173,8 +173,11 @@ mod tests {
         let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
         let path = dir.path().join(format!("{today}.jsonl"));
         let entry = entry("on-disk");
-        std::fs::write(&path, format!("{}\n", serde_json::to_string(&entry).unwrap()))
-            .unwrap();
+        std::fs::write(
+            &path,
+            format!("{}\n", serde_json::to_string(&entry).unwrap()),
+        )
+        .unwrap();
 
         let cache = ReceiptCache::with_default_capacity(dir.path().to_path_buf());
         assert!(cache.get("on-disk").is_none(), "not yet in cache");

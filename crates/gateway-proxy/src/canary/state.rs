@@ -287,10 +287,7 @@ mod tests {
         for _ in 0..DEFAULT_HISTORY_SIZE {
             state.record_probe(0.1).await;
         }
-        assert_eq!(
-            state.status_snapshot().await.health,
-            CanaryHealth::Degraded
-        );
+        assert_eq!(state.status_snapshot().await.health, CanaryHealth::Degraded);
         // ...then push enough healthy ones to overwrite all of them.
         for _ in 0..DEFAULT_HISTORY_SIZE {
             state.record_probe(0.95).await;

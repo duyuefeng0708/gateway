@@ -1,5 +1,5 @@
-use gateway_anonymizer::rules::RuleDetector;
 use gateway_anonymizer::detector::PiiDetector;
+use gateway_anonymizer::rules::RuleDetector;
 use gateway_common::types::PiiType;
 
 /// Helper: run detect synchronously.
@@ -124,8 +124,8 @@ fn malformed_yaml_returns_error() {
 
 #[test]
 fn rule_overlap_deduped_by_merge_spans() {
-    use gateway_anonymizer::tiered::TieredDetector;
     use gateway_anonymizer::regex_detector::RegexDetector;
+    use gateway_anonymizer::tiered::TieredDetector;
     use gateway_common::types::ScanMode;
 
     // A keyword rule that matches the same email the regex detector finds.
@@ -148,7 +148,8 @@ rules:
         async fn detect(
             &self,
             _text: &str,
-        ) -> Result<Vec<gateway_common::types::PiiSpan>, gateway_common::errors::DetectionError> {
+        ) -> Result<Vec<gateway_common::types::PiiSpan>, gateway_common::errors::DetectionError>
+        {
             Ok(vec![])
         }
         fn name(&self) -> &str {

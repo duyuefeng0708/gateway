@@ -138,10 +138,7 @@ fn pii_type_from_str(s: &str) -> Option<PiiType> {
 /// A detected span is a TP if it overlaps a ground-truth span with the same
 /// PiiType.  Each ground-truth span can match at most one detected span (and
 /// vice-versa).
-fn count_matches(
-    expected: &[LabeledSpan],
-    detected: &[PiiSpan],
-) -> (usize, usize, usize) {
+fn count_matches(expected: &[LabeledSpan], detected: &[PiiSpan]) -> (usize, usize, usize) {
     let mut matched_expected = vec![false; expected.len()];
     let mut matched_detected = vec![false; detected.len()];
 
@@ -156,9 +153,7 @@ fn count_matches(
                 Some(t) => t,
                 None => continue,
             };
-            if exp_type == det.pii_type
-                && spans_overlap(exp.start, exp.end, det.start, det.end)
-            {
+            if exp_type == det.pii_type && spans_overlap(exp.start, exp.end, det.start, det.end) {
                 matched_expected[ei] = true;
                 matched_detected[di] = true;
                 break;
@@ -178,8 +173,16 @@ fn count_matches_by_implicit(
     detected: &[PiiSpan],
     implicit: bool,
 ) -> (usize, usize, usize) {
-    let exp_filtered: Vec<_> = expected.iter().filter(|s| s.implicit == implicit).cloned().collect();
-    let det_filtered: Vec<_> = detected.iter().filter(|s| s.implicit == implicit).cloned().collect();
+    let exp_filtered: Vec<_> = expected
+        .iter()
+        .filter(|s| s.implicit == implicit)
+        .cloned()
+        .collect();
+    let det_filtered: Vec<_> = detected
+        .iter()
+        .filter(|s| s.implicit == implicit)
+        .cloned()
+        .collect();
     count_matches(&exp_filtered, &det_filtered)
 }
 
@@ -198,9 +201,8 @@ pub fn load_benchmark(path: &Path) -> Result<Vec<BenchmarkEntry>, DetectionError
         if line.is_empty() {
             continue;
         }
-        let entry: BenchmarkEntry = serde_json::from_str(line).map_err(|e| {
-            DetectionError::Other(format!("benchmark line {}: {e}", i + 1))
-        })?;
+        let entry: BenchmarkEntry = serde_json::from_str(line)
+            .map_err(|e| DetectionError::Other(format!("benchmark line {}: {e}", i + 1)))?;
         entries.push(entry);
     }
     Ok(entries)
@@ -307,8 +309,13 @@ pub fn print_report(report: &EvalReport) {
     for (i, e) in report.entries.iter().enumerate() {
         println!(
             "  [{}] {} | expected={} detected={} TP={} FP={} FN={}",
-            i, e.prompt_excerpt, e.expected_count, e.detected_count,
-            e.true_positives, e.false_positives, e.false_negatives
+            i,
+            e.prompt_excerpt,
+            e.expected_count,
+            e.detected_count,
+            e.true_positives,
+            e.false_positives,
+            e.false_negatives
         );
     }
 }
@@ -358,26 +365,22 @@ mod tests {
 
     #[test]
     fn count_matches_basic() {
-        let expected = vec![
-            LabeledSpan {
-                pii_type: "EMAIL".to_string(),
-                start: 8,
-                end: 25,
-                text: "alice@example.com".to_string(),
-                confidence: 1.0,
-                implicit: false,
-            },
-        ];
-        let detected = vec![
-            PiiSpan {
-                pii_type: PiiType::Email,
-                start: 8,
-                end: 25,
-                text: "alice@example.com".to_string(),
-                confidence: 1.0,
-                implicit: false,
-            },
-        ];
+        let expected = vec![LabeledSpan {
+            pii_type: "EMAIL".to_string(),
+            start: 8,
+            end: 25,
+            text: "alice@example.com".to_string(),
+            confidence: 1.0,
+            implicit: false,
+        }];
+        let detected = vec![PiiSpan {
+            pii_type: PiiType::Email,
+            start: 8,
+            end: 25,
+            text: "alice@example.com".to_string(),
+            confidence: 1.0,
+            implicit: false,
+        }];
         let (tp, fp, fn_) = count_matches(&expected, &detected);
         assert_eq!(tp, 1);
         assert_eq!(fp, 0);
@@ -387,16 +390,14 @@ mod tests {
     #[test]
     fn count_matches_with_false_positive() {
         let expected = vec![];
-        let detected = vec![
-            PiiSpan {
-                pii_type: PiiType::Phone,
-                start: 0,
-                end: 12,
-                text: "555-123-4567".to_string(),
-                confidence: 1.0,
-                implicit: false,
-            },
-        ];
+        let detected = vec![PiiSpan {
+            pii_type: PiiType::Phone,
+            start: 0,
+            end: 12,
+            text: "555-123-4567".to_string(),
+            confidence: 1.0,
+            implicit: false,
+        }];
         let (tp, fp, fn_) = count_matches(&expected, &detected);
         assert_eq!(tp, 0);
         assert_eq!(fp, 1);
@@ -405,16 +406,14 @@ mod tests {
 
     #[test]
     fn count_matches_with_false_negative() {
-        let expected = vec![
-            LabeledSpan {
-                pii_type: "PERSON".to_string(),
-                start: 0,
-                end: 5,
-                text: "Alice".to_string(),
-                confidence: 1.0,
-                implicit: false,
-            },
-        ];
+        let expected = vec![LabeledSpan {
+            pii_type: "PERSON".to_string(),
+            start: 0,
+            end: 5,
+            text: "Alice".to_string(),
+            confidence: 1.0,
+            implicit: false,
+        }];
         let detected = vec![];
         let (tp, fp, fn_) = count_matches(&expected, &detected);
         assert_eq!(tp, 0);

@@ -107,10 +107,7 @@ mod tests {
 
     #[test]
     fn output_hash_is_deterministic_and_normalised() {
-        assert_eq!(
-            output_hash("  Hello World  "),
-            output_hash("hello world"),
-        );
+        assert_eq!(output_hash("  Hello World  "), output_hash("hello world"),);
     }
 
     #[test]
@@ -151,7 +148,7 @@ mod tests {
         let baseline = baseline_fp();
         let mut observed = baseline.clone();
         observed.length_bucket = 4; // baseline is 5
-        // 1 + 0.5 + 1 + 1 / 4 = 0.875
+                                    // 1 + 0.5 + 1 + 1 / 4 = 0.875
         assert!((composite(&observed, &baseline) - 0.875).abs() < 1e-9);
     }
 
@@ -160,7 +157,7 @@ mod tests {
         let baseline = baseline_fp();
         let mut observed = baseline.clone();
         observed.length_bucket = 20; // baseline is 5
-        // 1 + 0 + 1 + 1 / 4 = 0.75
+                                     // 1 + 0 + 1 + 1 / 4 = 0.75
         assert!((composite(&observed, &baseline) - 0.75).abs() < 1e-9);
     }
 
