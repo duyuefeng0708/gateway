@@ -49,6 +49,21 @@ pub enum AuditError {
 
     #[error("audit write failed: {0}")]
     WriteError(String),
+
+    /// The audit writer's bounded queue is full. Returned by
+    /// `AuditHandle::write_entry` when downstream disk I/O can't keep up.
+    /// Callers should map this to HTTP 503 with a Retry-After header so
+    /// the proxy fails loud rather than queuing audit work indefinitely.
+    /// Codex F8 backpressure semantic.
+    #[error("audit writer overloaded; backpressure applied")]
+    Backpressured,
+
+    /// The dedicated audit writer thread is no longer running. Returned
+    /// when the writer thread panicked or the receive channel closed.
+    /// Operationally this is a process-level failure; the proxy should
+    /// surface it via /metrics and the orchestrator should restart.
+    #[error("audit writer thread terminated")]
+    WriterDown,
 }
 
 /// Top-level gateway errors mapping to HTTP status codes.
