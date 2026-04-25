@@ -1,5 +1,6 @@
 mod demo;
 mod doctor;
+mod verify;
 
 use clap::{Parser, Subcommand};
 
@@ -21,6 +22,12 @@ enum Commands {
     },
     /// Interactive split-terminal anonymization demo (no Ollama required).
     Demo,
+    /// Verify a receipt JSON file (offline). Confirms the entry hash
+    /// recomputes correctly, the chain link references the prior hash,
+    /// and (optionally) the HMAC key id matches the operator's expectation.
+    /// Does NOT contact Rekor — point `rekor-cli` at the rekor_uuid in
+    /// the receipt for that.
+    Verify(verify::VerifyArgs),
 }
 
 #[tokio::main]
@@ -44,6 +51,12 @@ async fn main() {
         Commands::Demo => {
             if let Err(e) = demo::run().await {
                 eprintln!("Demo error: {}", e);
+                std::process::exit(1);
+            }
+        }
+        Commands::Verify(args) => {
+            if let Err(e) = verify::run(args) {
+                eprintln!("{e}");
                 std::process::exit(1);
             }
         }

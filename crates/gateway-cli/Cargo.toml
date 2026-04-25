@@ -15,7 +15,8 @@ serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 tracing.workspace = true
-clap.workspace = true
+clap = { version = "4", features = ["derive", "env"] }
+thiserror.workspace = true
 ratatui.workspace = true
 crossterm.workspace = true
 reqwest.workspace = true

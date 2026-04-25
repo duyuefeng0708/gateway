@@ -297,7 +297,11 @@ impl AuditWriter {
 /// is a BTreeMap by default (no `preserve_order` feature on this crate),
 /// which gives us deterministic key order without an external canonical-
 /// JSON library. Codex F2.
-fn compute_hash(entry: &AuditEntry) -> Result<String, AuditError> {
+///
+/// Public so external verifier tools (e.g. `gateway-cli verify`) can
+/// recompute and cross-check the on-disk value without duplicating the
+/// recipe selection logic. Codex F15 offline-first verify.
+pub fn compute_hash(entry: &AuditEntry) -> Result<String, AuditError> {
     match entry.hash_recipe.as_str() {
         HASH_RECIPE_V1 => Ok(compute_hash_v1(entry)),
         HASH_RECIPE_V2_CANONICAL_JSON => compute_hash_v2_canonical_json(entry),

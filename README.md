@@ -167,6 +167,113 @@ To run with cc-gateway as the upstream instead of Anthropic directly:
 docker compose -f docker-compose.full.yml up
 ```
 
+## Receipts and tamper-evidence
+
+Every successful proxy request produces a **tamper-evident record** of what the gateway did with it. The gateway returns the record's id via the `x-gateway-receipt` response header; the full record is retrievable at `GET /v1/receipts/{id}`.
+
+A receipt looks like:
+
+```json
+{
+  "request_id": "4c1f8a52-3b...",
+  "timestamp": "2026-04-25T14:33:01Z",
+  "client_requested_model": "claude-sonnet-4-20250514",
+  "upstream_requested_model": "claude-sonnet-4-20250514",
+  "detector_fast_model": "gemma4:e4b",
+  "prompt_hmac": "abf3e2...",
+  "hmac_key_id": "primary",
+  "response_hash_status": "pending",
+  "anchor_status": "anchored",
+  "rekor_uuid": "24296...",
+  "log_index": 12345678,
+  "hash_recipe": "audit-v2-canonical-json",
+  "hash": "sha256...",
+  "prev_hash": "sha256...",
+  "signing_key_id": "primary",
+  "signature_alg": "ed25519"
+}
+```
+
+Each entry's `hash` is computed over canonical-JSON of every field except `hash` itself, and the chain of `prev_hash` pointers links every entry back to the proxy's first record. Periodically (every `GATEWAY_REKOR_ANCHOR_INTERVAL`, default 15 min) the gateway publishes a Merkle root over recent chain heads to [Sigstore Rekor](https://docs.sigstore.dev/logging/overview/) — once `anchor_status` flips to `anchored`, anyone can confirm the entry was integrated into the public log.
+
+### What receipts prove
+
+* The bytes the gateway forwarded to the upstream produced exactly the digest stored in `prompt_hmac`, under the key identified by `hmac_key_id`. (Keyed digest defeats confirmation attacks against bare hashes.)
+* The chain of receipts is internally consistent — no entry can be inserted, removed, or modified after the fact without breaking the chain.
+* Anchored entries were integrated into Rekor's public log at `integrated_time`. A third party can verify with `rekor-cli get --uuid <rekor_uuid>`.
+
+### What receipts do NOT prove
+
+* That **PII removal was correct**. The receipt records *that* anonymization happened and how many spans were detected; it does not certify the spans were complete or accurate. The 100+ prompt benchmark in `eval/` is where coverage is measured.
+* That the **upstream model was genuine**. The gateway sees what the upstream API returns; it has no way to attest that Anthropic's response actually came from Claude vs a swapped backend. The canary fingerprint in PR-B (separate roadmap item) addresses this probabilistically.
+* That the **response was delivered to the client unchanged**. A hostile reverse proxy between gateway and client could rewrite the body. Receipts are proof of what the gateway *recorded*, not what the client received.
+
+In other words, receipts are **tamper-evident audit records anchored to a public log**, not attestations of semantic truth. Treat them accordingly.
+
+### Verifying a receipt
+
+Save the receipt to a file:
+
+```bash
+curl -sS http://localhost:8443/v1/receipts/$RECEIPT_ID > receipt.json
+```
+
+Run the offline verifier:
+
+```bash
+gateway verify ./receipt.json
+# Verifying receipt for request_id: 4c1f8a52-3b...
+#   Hash recipe: audit-v2-canonical-json
+#   Chain prev:  abc12345...90abcdef
+#   Chain hash:  def67890...12fedcba
+#   Hash recompute:           OK
+#   HMAC key id (primary):    OK
+#   Anchor status:            Anchored
+#   Rekor uuid:               24296fb24b...
+#   Verify on Rekor with:     rekor-cli get --uuid 24296fb24b...
+#
+# RECEIPT VERIFIED.
+# Note: this confirms the gateway's chain is internally consistent.
+# It does NOT prove PII removal, model authenticity, or response integrity.
+```
+
+Anyone with the receipt and the gateway operator's HMAC key id can run this. The Rekor inclusion proof can be checked independently with [`rekor-cli`](https://github.com/sigstore/rekor) — no trust in the gateway operator required.
+
+### Operator setup
+
+The receipt subsystem requires three new environment variables:
+
+| Variable | Required | Description |
+|---|---|---|
+| `GATEWAY_HMAC_KEY` (hex) or `GATEWAY_HMAC_KEY_FILE` | yes | At least 32 bytes of high-entropy random data. Used to compute prompt/response digests. Rotate by setting a new key + new id; old receipts continue to validate against archived keys. |
+| `GATEWAY_HMAC_KEY_ID` | no (default `primary`) | Stable identifier for the HMAC key, embedded in every receipt. |
+| `GATEWAY_SIGNING_KEY` (hex 32-byte seed) or `GATEWAY_SIGNING_KEY_FILE` (PEM) | yes | Ed25519 private key that signs the Merkle root submitted to Rekor. |
+| `GATEWAY_SIGNING_KEY_ID` | no (default `primary`) | Stable identifier for the signing key. |
+| `GATEWAY_REKOR_URL` | no (default `https://rekor.sigstore.dev`) | Rekor instance to anchor against. |
+| `GATEWAY_REKOR_ANCHOR_INTERVAL` | no (default `900` sec / 15 min) | Seconds between anchor cycles. Drops Rekor load by ~100x vs per-request anchoring. |
+
+Generate a fresh pair locally:
+
+```bash
+# 32-byte HMAC key (hex)
+openssl rand -hex 32
+
+# 32-byte Ed25519 seed (hex)
+openssl rand -hex 32
+```
+
+### Observability for receipts
+
+Three new Prometheus metrics surface the receipt pipeline:
+
+```
+gateway_audit_backpressure_total          counter   # 503-ed audit submissions
+gateway_transparency_publish_failed_total counter   # Rekor anchor failures
+gateway_transparency_last_publish_age_seconds gauge  # staleness
+```
+
+Operators should alert on `gateway_transparency_last_publish_age_seconds` exceeding ~3x the configured anchor interval. Persistent failures usually mean Rekor public-good is degraded; the local chain stays valid in the meantime.
+
 ## Configuration
 
 All settings are configured via environment variables.
