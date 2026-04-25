@@ -44,9 +44,7 @@ impl GatewayConfig {
     pub fn from_env() -> Result<Self, String> {
         // API key is required for upstream forwarding
         if env::var("ANTHROPIC_API_KEY").is_err() && env::var("OPENAI_API_KEY").is_err() {
-            return Err(
-                "at least one of ANTHROPIC_API_KEY or OPENAI_API_KEY must be set".into(),
-            );
+            return Err("at least one of ANTHROPIC_API_KEY or OPENAI_API_KEY must be set".into());
         }
 
         Ok(Self {
@@ -67,9 +65,7 @@ impl GatewayConfig {
                 .map_err(|e| format!("invalid GATEWAY_AUDIT_RETENTION: {e}"))?,
             audit_path: env_or("GATEWAY_AUDIT_PATH", "./data/audit/"),
             log_level: env_or("GATEWAY_LOG_LEVEL", "info"),
-            show_score: env_or("GATEWAY_SHOW_SCORE", "true")
-                .parse()
-                .unwrap_or(true),
+            show_score: env_or("GATEWAY_SHOW_SCORE", "true").parse().unwrap_or(true),
             max_request_size: 128 * 1024, // 128KB
             detection_timeout: parse_duration(&env_or("GATEWAY_DETECTION_TIMEOUT", "8"))?,
             upstream_timeout: parse_duration(&env_or("GATEWAY_UPSTREAM_TIMEOUT", "60"))?,
@@ -80,9 +76,7 @@ impl GatewayConfig {
             escalation_min_prompt_tokens: 200,
             rules_path: env::var("GATEWAY_RULES_PATH").ok(),
             routing_config_path: env::var("GATEWAY_ROUTING_CONFIG").ok(),
-            streaming_enabled: env_or("GATEWAY_STREAMING", "true")
-                .parse()
-                .unwrap_or(true),
+            streaming_enabled: env_or("GATEWAY_STREAMING", "true").parse().unwrap_or(true),
         })
     }
 }
@@ -94,7 +88,9 @@ fn env_or(key: &str, default: &str) -> String {
 fn parse_duration(s: &str) -> Result<Duration, String> {
     let s = s.trim();
     if let Some(hours) = s.strip_suffix('h') {
-        let h: u64 = hours.parse().map_err(|e| format!("invalid duration: {e}"))?;
+        let h: u64 = hours
+            .parse()
+            .map_err(|e| format!("invalid duration: {e}"))?;
         Ok(Duration::from_secs(h * 3600))
     } else if let Some(days) = s.strip_suffix('d') {
         let d: u64 = days.parse().map_err(|e| format!("invalid duration: {e}"))?;

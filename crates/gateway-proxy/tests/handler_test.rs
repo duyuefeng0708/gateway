@@ -53,10 +53,26 @@ async fn test_state(upstream_url: &str) -> gateway_proxy::AppState {
         router: gateway_proxy::Router::default_router(),
         warm: Arc::new(std::sync::atomic::AtomicBool::new(true)),
         detection_semaphore: Arc::new(tokio::sync::Semaphore::new(2)),
-        audit: gateway_anonymizer::audit::AuditHandle::spawn(tempfile::tempdir().unwrap().keep()).unwrap(),
-        hmac: Arc::new(gateway_anonymizer::hmac_digest::HmacContext::from_hex("0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20", "test").unwrap()),
-        receipts: Arc::new(gateway_proxy::receipts::ReceiptCache::with_default_capacity(tempfile::tempdir().unwrap().keep())),
-        transparency: gateway_proxy::transparency::TransparencyState::from_parts(ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]), "test".to_string(), "http://unused".to_string(), std::time::Duration::from_secs(900)),
+        audit: gateway_anonymizer::audit::AuditHandle::spawn(tempfile::tempdir().unwrap().keep())
+            .unwrap(),
+        hmac: Arc::new(
+            gateway_anonymizer::hmac_digest::HmacContext::from_hex(
+                "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+                "test",
+            )
+            .unwrap(),
+        ),
+        receipts: Arc::new(
+            gateway_proxy::receipts::ReceiptCache::with_default_capacity(
+                tempfile::tempdir().unwrap().keep(),
+            ),
+        ),
+        transparency: gateway_proxy::transparency::TransparencyState::from_parts(
+            ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]),
+            "test".to_string(),
+            "http://unused".to_string(),
+            std::time::Duration::from_secs(900),
+        ),
         canary: gateway_proxy::canary::CanaryState::stub(),
     }
 }
@@ -252,9 +268,7 @@ async fn pii_email_is_anonymized_in_forwarded_body() {
     assert_eq!(bodies.len(), 1, "expected exactly one forwarded request");
 
     let forwarded: Value = serde_json::from_str(&bodies[0]).unwrap();
-    let forwarded_content = forwarded["messages"][0]["content"]
-        .as_str()
-        .unwrap();
+    let forwarded_content = forwarded["messages"][0]["content"].as_str().unwrap();
 
     assert!(
         !forwarded_content.contains("alice@example.com"),
@@ -472,9 +486,7 @@ async fn response_deanonymization_works() {
             .await
             .unwrap_or_default();
         let body: Value = serde_json::from_slice(&body_bytes).unwrap();
-        let content = body["messages"][0]["content"]
-            .as_str()
-            .unwrap_or("");
+        let content = body["messages"][0]["content"].as_str().unwrap_or("");
 
         // The upstream "uses" the placeholder in its response text.
         let response = json!({

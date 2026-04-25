@@ -54,10 +54,26 @@ async fn make_state(warm: bool) -> gateway_proxy::AppState {
         router: gateway_proxy::Router::default_router(),
         warm: Arc::new(AtomicBool::new(warm)),
         detection_semaphore: Arc::new(Semaphore::new(2)),
-        audit: gateway_anonymizer::audit::AuditHandle::spawn(tempfile::tempdir().unwrap().keep()).unwrap(),
-        hmac: Arc::new(gateway_anonymizer::hmac_digest::HmacContext::from_hex("0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20", "test").unwrap()),
-        receipts: Arc::new(gateway_proxy::receipts::ReceiptCache::with_default_capacity(tempfile::tempdir().unwrap().keep())),
-        transparency: gateway_proxy::transparency::TransparencyState::from_parts(ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]), "test".to_string(), "http://unused".to_string(), std::time::Duration::from_secs(900)),
+        audit: gateway_anonymizer::audit::AuditHandle::spawn(tempfile::tempdir().unwrap().keep())
+            .unwrap(),
+        hmac: Arc::new(
+            gateway_anonymizer::hmac_digest::HmacContext::from_hex(
+                "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+                "test",
+            )
+            .unwrap(),
+        ),
+        receipts: Arc::new(
+            gateway_proxy::receipts::ReceiptCache::with_default_capacity(
+                tempfile::tempdir().unwrap().keep(),
+            ),
+        ),
+        transparency: gateway_proxy::transparency::TransparencyState::from_parts(
+            ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]),
+            "test".to_string(),
+            "http://unused".to_string(),
+            std::time::Duration::from_secs(900),
+        ),
         canary: gateway_proxy::canary::CanaryState::stub(),
     }
 }
@@ -78,7 +94,9 @@ async fn ready_returns_503_when_warm_is_false() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    let body = axum::body::to_bytes(response.into_body(), 1024).await.unwrap();
+    let body = axum::body::to_bytes(response.into_body(), 1024)
+        .await
+        .unwrap();
     assert_eq!(&body[..], b"warming");
 }
 
@@ -98,7 +116,9 @@ async fn ready_returns_200_when_warm_is_true() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(response.into_body(), 1024).await.unwrap();
+    let body = axum::body::to_bytes(response.into_body(), 1024)
+        .await
+        .unwrap();
     assert_eq!(&body[..], b"ok");
 }
 

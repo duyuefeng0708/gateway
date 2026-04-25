@@ -75,9 +75,7 @@ impl AuditWriter {
             .truncate(false)
             .write(true)
             .open(&lock_path)
-            .map_err(|e| {
-                AuditError::WriteError(format!("failed to open audit lock file: {e}"))
-            })?;
+            .map_err(|e| AuditError::WriteError(format!("failed to open audit lock file: {e}")))?;
 
         // Non-blocking exclusive lock. If a sibling writer already holds
         // the lock we fail loud at boot rather than letting two processes
@@ -156,10 +154,12 @@ impl AuditWriter {
 
     /// Internal: serialise + append + sync_data. Shared by both write_entry
     /// (legacy) and write_entry_v2 (PR-A1).
-    fn persist_entry(&self, entry: &AuditEntry, now: chrono::DateTime<Utc>) -> Result<(), AuditError> {
-        let log_path = self
-            .dir
-            .join(format!("{}.jsonl", now.format("%Y-%m-%d")));
+    fn persist_entry(
+        &self,
+        entry: &AuditEntry,
+        now: chrono::DateTime<Utc>,
+    ) -> Result<(), AuditError> {
+        let log_path = self.dir.join(format!("{}.jsonl", now.format("%Y-%m-%d")));
 
         let line =
             serde_json::to_string(entry).map_err(|e| AuditError::WriteError(e.to_string()))?;
@@ -239,9 +239,7 @@ impl AuditWriter {
         // and any field added later. See compute_hash.
         entry.hash = compute_hash(&entry)?;
 
-        let log_path = self
-            .dir
-            .join(format!("{}.jsonl", now.format("%Y-%m-%d")));
+        let log_path = self.dir.join(format!("{}.jsonl", now.format("%Y-%m-%d")));
 
         let line =
             serde_json::to_string(&entry).map_err(|e| AuditError::WriteError(e.to_string()))?;
@@ -335,7 +333,6 @@ fn compute_hash_v2_canonical_json(entry: &AuditEntry) -> Result<String, AuditErr
 }
 
 impl AuditWriter {
-
     /// Read the last hash from the most recent log file.
     fn read_last_hash(dir: &Path) -> Option<String> {
         let mut entries: Vec<_> = fs::read_dir(dir)
@@ -371,8 +368,8 @@ impl AuditWriter {
     /// as they kept the chain pointers intact. The hash on disk was never
     /// re-validated. Codex F1.
     pub fn verify_chain(path: impl AsRef<Path>) -> Result<bool, AuditError> {
-        let content = fs::read_to_string(path.as_ref())
-            .map_err(|e| AuditError::WriteError(e.to_string()))?;
+        let content =
+            fs::read_to_string(path.as_ref()).map_err(|e| AuditError::WriteError(e.to_string()))?;
 
         let entries: Vec<AuditEntry> = content
             .lines()
@@ -435,8 +432,8 @@ impl AuditWriter {
                 return Ok(false);
             }
 
-            let content = fs::read_to_string(&path)
-                .map_err(|e| AuditError::WriteError(e.to_string()))?;
+            let content =
+                fs::read_to_string(&path).map_err(|e| AuditError::WriteError(e.to_string()))?;
             let lines: Vec<&str> = content.lines().filter(|l| !l.trim().is_empty()).collect();
             if lines.is_empty() {
                 continue;
@@ -537,9 +534,7 @@ impl AuditHandle {
                         }
                     }
                 }
-                tracing::warn!(
-                    "audit writer thread: command channel closed, exiting cleanly"
-                );
+                tracing::warn!("audit writer thread: command channel closed, exiting cleanly");
             })
             .map_err(|e| {
                 AuditError::WriteError(format!("failed to spawn audit writer thread: {e}"))
@@ -641,7 +636,9 @@ mod tests {
         for i in 0..5 {
             let spans = make_spans(i + 1);
             let score = PrivacyScore::compute(&spans);
-            writer.write_entry(&format!("session-{i}"), &spans, score).unwrap();
+            writer
+                .write_entry(&format!("session-{i}"), &spans, score)
+                .unwrap();
         }
 
         let log_path = dir
@@ -735,22 +732,19 @@ mod tests {
         for i in 0..3 {
             let spans = make_spans(i + 1);
             let score = PrivacyScore::compute(&spans);
-            writer.write_entry(&format!("session-{i}"), &spans, score).unwrap();
+            writer
+                .write_entry(&format!("session-{i}"), &spans, score)
+                .unwrap();
         }
         dir.join(format!("{}.jsonl", Utc::now().format("%Y-%m-%d")))
     }
 
     /// Mutate the JSON value of the line at `line_idx` and rewrite the file.
     /// Used to simulate on-disk tampering.
-    fn tamper_line(
-        log_path: &Path,
-        line_idx: usize,
-        mutate: impl FnOnce(&mut serde_json::Value),
-    ) {
+    fn tamper_line(log_path: &Path, line_idx: usize, mutate: impl FnOnce(&mut serde_json::Value)) {
         let content = fs::read_to_string(log_path).unwrap();
         let mut lines: Vec<String> = content.lines().map(String::from).collect();
-        let mut value: serde_json::Value =
-            serde_json::from_str(&lines[line_idx]).unwrap();
+        let mut value: serde_json::Value = serde_json::from_str(&lines[line_idx]).unwrap();
         mutate(&mut value);
         lines[line_idx] = serde_json::to_string(&value).unwrap();
         fs::write(log_path, lines.join("\n") + "\n").unwrap();
@@ -813,7 +807,9 @@ mod tests {
     #[test]
     fn legacy_v1_entry_verifies_under_v1_recipe() {
         let dir = TempDir::new().unwrap();
-        let log_path = dir.path().join(format!("{}.jsonl", Utc::now().format("%Y-%m-%d")));
+        let log_path = dir
+            .path()
+            .join(format!("{}.jsonl", Utc::now().format("%Y-%m-%d")));
 
         let mut entry = AuditEntry {
             timestamp: Utc::now(),
@@ -843,7 +839,9 @@ mod tests {
     #[test]
     fn v1_recipe_does_not_authenticate_pii_types_by_design() {
         let dir = TempDir::new().unwrap();
-        let log_path = dir.path().join(format!("{}.jsonl", Utc::now().format("%Y-%m-%d")));
+        let log_path = dir
+            .path()
+            .join(format!("{}.jsonl", Utc::now().format("%Y-%m-%d")));
 
         let mut entry = AuditEntry {
             timestamp: Utc::now(),
@@ -893,7 +891,9 @@ mod tests {
     #[test]
     fn mixed_v1_and_v2_entries_chain_correctly() {
         let dir = TempDir::new().unwrap();
-        let log_path = dir.path().join(format!("{}.jsonl", Utc::now().format("%Y-%m-%d")));
+        let log_path = dir
+            .path()
+            .join(format!("{}.jsonl", Utc::now().format("%Y-%m-%d")));
 
         let mut v1 = AuditEntry {
             timestamp: Utc::now(),
@@ -938,7 +938,9 @@ mod tests {
     #[test]
     fn legacy_jsonl_without_hash_recipe_field_defaults_to_v1() {
         let dir = TempDir::new().unwrap();
-        let log_path = dir.path().join(format!("{}.jsonl", Utc::now().format("%Y-%m-%d")));
+        let log_path = dir
+            .path()
+            .join(format!("{}.jsonl", Utc::now().format("%Y-%m-%d")));
 
         // Construct V1 entry hash, then strip hash_recipe from the JSON to
         // mimic a file written before the field existed.
@@ -968,12 +970,7 @@ mod tests {
 
     /// Helper: write `count` entries into a single jsonl named `<date>.jsonl`,
     /// chained from `prev`. Returns the last entry's hash.
-    fn write_day_file(
-        dir: &Path,
-        date: &str,
-        count: usize,
-        starting_prev: &str,
-    ) -> String {
+    fn write_day_file(dir: &Path, date: &str, count: usize, starting_prev: &str) -> String {
         let log_path = dir.join(format!("{date}.jsonl"));
         let mut prev = starting_prev.to_string();
         let mut content = String::new();
@@ -988,7 +985,7 @@ mod tests {
                 hash: String::new(),
                 prev_hash: prev.clone(),
                 hash_recipe: HASH_RECIPE_V2_CANONICAL_JSON.to_string(),
-            ..AuditEntry::default()
+                ..AuditEntry::default()
             };
             entry.hash = compute_hash_v2_canonical_json(&entry).unwrap();
             prev = entry.hash.clone();
@@ -1025,13 +1022,9 @@ mod tests {
         let _day2_last = write_day_file(dir.path(), "2026-04-25", 2, &day1_last);
 
         // Tamper inside day 1.
-        tamper_line(
-            &dir.path().join("2026-04-24.jsonl"),
-            1,
-            |v| {
-                v["session_id"] = serde_json::json!("forged");
-            },
-        );
+        tamper_line(&dir.path().join("2026-04-24.jsonl"), 1, |v| {
+            v["session_id"] = serde_json::json!("forged");
+        });
 
         assert!(!AuditWriter::verify_dir(dir.path()).unwrap());
     }
@@ -1056,7 +1049,10 @@ mod tests {
             Ok(_) => panic!("expected lock contention while first writer holds the lock"),
             Err(e) => e.to_string(),
         };
-        assert!(msg.contains("locked"), "error must mention the lock; got: {msg}");
+        assert!(
+            msg.contains("locked"),
+            "error must mention the lock; got: {msg}"
+        );
     }
 
     #[test]
@@ -1197,12 +1193,7 @@ mod tests {
         let files: Vec<_> = fs::read_dir(dir.path())
             .unwrap()
             .filter_map(Result::ok)
-            .filter(|e| {
-                e.path()
-                    .extension()
-                    .map(|x| x == "jsonl")
-                    .unwrap_or(false)
-            })
+            .filter(|e| e.path().extension().map(|x| x == "jsonl").unwrap_or(false))
             .collect();
         assert_eq!(files.len(), 1);
 
@@ -1214,8 +1205,7 @@ mod tests {
             .to_string();
 
         let content = fs::read_to_string(&path).unwrap();
-        let entry: AuditEntry =
-            serde_json::from_str(content.lines().next().unwrap()).unwrap();
+        let entry: AuditEntry = serde_json::from_str(content.lines().next().unwrap()).unwrap();
         let entry_date = entry.timestamp.format("%Y-%m-%d").to_string();
 
         assert_eq!(filename_date, entry_date);

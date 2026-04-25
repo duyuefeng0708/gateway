@@ -174,10 +174,7 @@ mod tests {
             port: 443,
         }];
         let resolved = resolve_endpoints(&endpoints).await;
-        assert!(
-            resolved.is_empty(),
-            "non-existent host should be skipped"
-        );
+        assert!(resolved.is_empty(), "non-existent host should be skipped");
     }
 
     #[tokio::test]
@@ -190,10 +187,11 @@ mod tests {
             host: "localhost".to_string(),
             port: 80,
         }];
-        let handle = tokio::spawn(async move {
-            resolve_endpoints(&endpoints).await
-        });
+        let handle = tokio::spawn(async move { resolve_endpoints(&endpoints).await });
         let resolved = handle.await.expect("task should not panic");
-        assert!(!resolved.is_empty(), "localhost should resolve from spawned task");
+        assert!(
+            !resolved.is_empty(),
+            "localhost should resolve from spawned task"
+        );
     }
 }

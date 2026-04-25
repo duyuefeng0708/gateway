@@ -220,7 +220,10 @@ fn test_text_mismatch_no_fallback_skip() {
     let spans = vec![span(PiiType::Email, 3, 8, "alice@example.com")];
 
     let (redacted, placeholders) = substitute(text, &spans);
-    assert!(placeholders.is_empty(), "span with no match should be skipped");
+    assert!(
+        placeholders.is_empty(),
+        "span with no match should be skipped"
+    );
     assert_eq!(redacted, text, "text unchanged when span skipped");
 }
 

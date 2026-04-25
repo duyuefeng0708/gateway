@@ -208,10 +208,7 @@ impl PiiDetector for TieredDetector {
     /// tier-visibility tracking. Overrides the trait default so the proxy
     /// can emit accurate metrics (tier_used, deep_attempted, deep_succeeded,
     /// deep_error, rules_attempted, rules_error) from the returned struct.
-    async fn detect_with_metadata(
-        &self,
-        text: &str,
-    ) -> Result<DetectionResult, DetectionError> {
+    async fn detect_with_metadata(&self, text: &str) -> Result<DetectionResult, DetectionError> {
         let deep_available = self.deep.is_some();
 
         let (fast_spans, rules_attempted, rules_error) = self.run_fast_tier(text).await?;
@@ -381,7 +378,9 @@ mod tests {
     }
 
     fn make_long_text(word_count: usize) -> String {
-        std::iter::repeat_n("word", word_count).collect::<Vec<_>>().join(" ")
+        std::iter::repeat_n("word", word_count)
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 
     // -- Tests ------------------------------------------------------------------
@@ -404,10 +403,7 @@ mod tests {
         assert!(!result.deep_scan_used);
         assert!(result.deep_scan_available);
         // Deep span should NOT appear
-        assert!(result
-            .spans
-            .iter()
-            .all(|s| s.pii_type != PiiType::Ssn));
+        assert!(result.spans.iter().all(|s| s.pii_type != PiiType::Ssn));
     }
 
     #[tokio::test]
@@ -445,10 +441,7 @@ mod tests {
         assert_eq!(result.spans.len(), 1);
         assert!(!result.deep_scan_used);
         // Deep span should NOT appear
-        assert!(result
-            .spans
-            .iter()
-            .all(|s| s.pii_type != PiiType::Ssn));
+        assert!(result.spans.iter().all(|s| s.pii_type != PiiType::Ssn));
     }
 
     #[tokio::test]
@@ -653,7 +646,10 @@ mod tests {
         // we can assert the shape. If it failed, it failed on the fast
         // detector, not on deep — which is what we want for fast mode.
         if let Ok(r) = result {
-            assert!(!r.deep_scan_available, "fast mode should not wire a deep detector");
+            assert!(
+                !r.deep_scan_available,
+                "fast mode should not wire a deep detector"
+            );
             assert!(!r.deep_attempted);
         }
     }
@@ -682,7 +678,10 @@ mod tests {
         // still passes (we skip). Intent: verify config wiring, not
         // network state.
         if let Ok(r) = tiered.detect_with_metadata("short").await {
-            assert!(r.deep_scan_available, "auto mode should wire a deep detector");
+            assert!(
+                r.deep_scan_available,
+                "auto mode should wire a deep detector"
+            );
         }
     }
 
@@ -692,7 +691,10 @@ mod tests {
         let tiered = TieredDetector::from_config(&config);
         assert_eq!(tiered.name(), "tiered");
         if let Ok(r) = tiered.detect_with_metadata("short").await {
-            assert!(r.deep_scan_available, "deep mode should wire a deep detector");
+            assert!(
+                r.deep_scan_available,
+                "deep mode should wire a deep detector"
+            );
         }
     }
 
@@ -757,7 +759,7 @@ mod tests {
         let spans = vec![
             span(PiiType::Credential, 0, 30, 0.95),
             span(PiiType::Email, 5, 20, 1.0),   // fully inside 0..30
-            span(PiiType::Person, 10, 15, 0.9),  // fully inside 0..30
+            span(PiiType::Person, 10, 15, 0.9), // fully inside 0..30
         ];
         let merged = merge_spans(spans);
         assert_eq!(merged.len(), 1);

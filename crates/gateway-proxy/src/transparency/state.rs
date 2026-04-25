@@ -125,8 +125,7 @@ impl TransparencyState {
 
         let signing_key_id =
             env::var("GATEWAY_SIGNING_KEY_ID").unwrap_or_else(|_| DEFAULT_SIGNING_KEY_ID.into());
-        let rekor_url =
-            env::var("GATEWAY_REKOR_URL").unwrap_or_else(|_| DEFAULT_REKOR_URL.into());
+        let rekor_url = env::var("GATEWAY_REKOR_URL").unwrap_or_else(|_| DEFAULT_REKOR_URL.into());
         let interval_secs = env::var("GATEWAY_REKOR_ANCHOR_INTERVAL")
             .ok()
             .and_then(|s| s.parse::<u64>().ok())

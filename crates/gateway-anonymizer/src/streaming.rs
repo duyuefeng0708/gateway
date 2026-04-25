@@ -43,10 +43,9 @@ impl StreamingDeanonymizer {
             .map(|p| (p.placeholder_text, p.original_text))
             .collect();
 
-        let placeholder_re = Regex::new(
-            r"^\[(PERSON|ORG|EMAIL|LOCATION|PHONE|SSN|CREDENTIAL)_[a-f0-9]{8}\]$",
-        )
-        .expect("hardcoded regex must compile");
+        let placeholder_re =
+            Regex::new(r"^\[(PERSON|ORG|EMAIL|LOCATION|PHONE|SSN|CREDENTIAL)_[a-f0-9]{8}\]$")
+                .expect("hardcoded regex must compile");
 
         Self {
             lookup,

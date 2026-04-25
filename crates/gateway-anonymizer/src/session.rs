@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use chrono::Utc;
 use gateway_common::errors::SessionError;
-use gateway_common::types::{Placeholder, PiiType};
+use gateway_common::types::{PiiType, Placeholder};
 use rusqlite::Connection;
 use tokio::sync::Mutex;
 use tracing::warn;
@@ -28,8 +28,8 @@ impl SessionStore {
     pub async fn new(path: &str) -> Result<Self, SessionError> {
         let path = path.to_string();
         let conn = tokio::task::spawn_blocking(move || -> Result<Connection, SessionError> {
-            let conn = Connection::open(&path)
-                .map_err(|e| SessionError::DatabaseError(e.to_string()))?;
+            let conn =
+                Connection::open(&path).map_err(|e| SessionError::DatabaseError(e.to_string()))?;
             conn.pragma_update(None, "journal_mode", "WAL")
                 .map_err(|e| SessionError::DatabaseError(e.to_string()))?;
             conn.execute_batch(
@@ -48,8 +48,7 @@ impl SessionStore {
             Ok(conn)
         })
         .await
-        .map_err(|e| SessionError::DatabaseError(format!("task join error: {e}")))?
-        ?;
+        .map_err(|e| SessionError::DatabaseError(format!("task join error: {e}")))??;
 
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -122,10 +121,9 @@ impl SessionStore {
                     )
                     .map_err(|e| SessionError::DatabaseError(e.to_string()))?;
                 let result = stmt
-                    .query_row(
-                        rusqlite::params![session_id, placeholder_text],
-                        |row| row.get::<_, String>(0),
-                    )
+                    .query_row(rusqlite::params![session_id, placeholder_text], |row| {
+                        row.get::<_, String>(0)
+                    })
                     .optional()
                     .map_err(|e| SessionError::DatabaseError(e.to_string()))?;
                 Ok(result)
@@ -136,10 +134,7 @@ impl SessionStore {
     }
 
     /// Retrieve all placeholders stored for a session.
-    pub async fn lookup_all(
-        &self,
-        session_id: &str,
-    ) -> Result<Vec<Placeholder>, SessionError> {
+    pub async fn lookup_all(&self, session_id: &str) -> Result<Vec<Placeholder>, SessionError> {
         let conn = Arc::clone(&self.conn);
         let session_id = session_id.to_string();
 
@@ -196,8 +191,10 @@ impl SessionStore {
 
         tokio::task::spawn_blocking(move || {
             let guard = conn.blocking_lock();
-            let cutoff = Utc::now() - chrono::Duration::from_std(ttl)
-                .map_err(|e| SessionError::DatabaseError(format!("duration conversion: {e}")))?;
+            let cutoff = Utc::now()
+                - chrono::Duration::from_std(ttl).map_err(|e| {
+                    SessionError::DatabaseError(format!("duration conversion: {e}"))
+                })?;
             let cutoff_str = cutoff.to_rfc3339();
 
             retry(MAX_RETRIES, || {

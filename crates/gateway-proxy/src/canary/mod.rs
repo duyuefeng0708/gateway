@@ -16,6 +16,7 @@
 //! - [`features`] — per-feature scoring functions exposed for testing.
 
 pub mod features;
+pub mod probe;
 pub mod state;
 
 // Re-export the baseline types from gateway-common so existing
@@ -23,6 +24,7 @@ pub mod state;
 // working. The types live in common because the CLI also serialises
 // them; the runtime state stays here.
 pub use gateway_common::canary_baseline::{Baseline, ProbeFingerprint};
+pub use probe::{ProbeError, ProbeRunner};
 pub use state::{CanaryState, CanaryStatus};
 
 use axum::extract::State;

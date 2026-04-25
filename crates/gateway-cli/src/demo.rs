@@ -203,7 +203,11 @@ fn draw(frame: &mut ratatui::Frame, app: &App) {
         ),
         Span::raw(" | "),
         Span::styled(
-            format!("{} PII item{} detected", app.pii_count, if app.pii_count == 1 { "" } else { "s" }),
+            format!(
+                "{} PII item{} detected",
+                app.pii_count,
+                if app.pii_count == 1 { "" } else { "s" }
+            ),
             Style::default().fg(Color::White),
         ),
         Span::raw(" | "),
@@ -213,14 +217,13 @@ fn draw(frame: &mut ratatui::Frame, app: &App) {
         ),
     ]);
 
-    let status = Paragraph::new(status_line)
-        .style(Style::default().bg(Color::DarkGray).fg(Color::White));
+    let status =
+        Paragraph::new(status_line).style(Style::default().bg(Color::DarkGray).fg(Color::White));
     frame.render_widget(status, bottom_chunks[0]);
 
     // Input line
     let input_display = format!(" > {}_", app.input);
-    let input = Paragraph::new(input_display)
-        .style(Style::default().fg(Color::Cyan));
+    let input = Paragraph::new(input_display).style(Style::default().fg(Color::Cyan));
     frame.render_widget(input, bottom_chunks[1]);
 }
 

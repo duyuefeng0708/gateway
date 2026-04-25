@@ -65,17 +65,15 @@ pub struct RuleDetector {
 impl RuleDetector {
     /// Load rules from a YAML file on disk.
     pub fn from_file(path: &str) -> Result<Self, DetectionError> {
-        let content = std::fs::read_to_string(path).map_err(|e| {
-            DetectionError::Other(format!("failed to read rules file {path}: {e}"))
-        })?;
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| DetectionError::Other(format!("failed to read rules file {path}: {e}")))?;
         Self::from_yaml(&content)
     }
 
     /// Parse rules from a YAML string.
     pub fn from_yaml(yaml_str: &str) -> Result<Self, DetectionError> {
-        let file: RulesFile = serde_yaml::from_str(yaml_str).map_err(|e| {
-            DetectionError::Other(format!("invalid rules YAML: {e}"))
-        })?;
+        let file: RulesFile = serde_yaml::from_str(yaml_str)
+            .map_err(|e| DetectionError::Other(format!("invalid rules YAML: {e}")))?;
 
         let mut compiled = Vec::with_capacity(file.rules.len());
 

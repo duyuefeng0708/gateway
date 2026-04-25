@@ -10,12 +10,15 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Instant;
 
+use rand::rngs::StdRng;
+use rand::SeedableRng;
 use serde::Serialize;
 use tokio::sync::RwLock;
 
 use gateway_common::canary_baseline::Baseline;
+
+use crate::canary::probe::{jittered_interval, ProbeRunner};
 
 const DEFAULT_INTERVAL_SECS: u64 = 900;
 const DEFAULT_HEALTHY_THRESHOLD: f64 = 0.8;
@@ -171,24 +174,38 @@ impl CanaryState {
         self.record_probe(score).await;
     }
 
-    /// Spawn the probe loop. The probe itself is intentionally NOT
-    /// implemented in this PR — wiring it requires an HTTP client +
-    /// the upstream URL + the operator's API key, which are easier to
-    /// review in a follow-up PR-B.1. The detached task here records a
-    /// debug log every `interval_secs` so operators see the canary is
-    /// alive even before the probe payload lands.
-    pub fn spawn_probe(self) -> tokio::task::JoinHandle<()> {
+    /// Spawn the probe loop.
+    ///
+    /// With `Some(runner)`, each cycle fires a real upstream probe via
+    /// [`ProbeRunner::run_one_cycle`] and records the score. With
+    /// `None` (e.g. no API key, stub baseline), the loop just logs every
+    /// interval so operators can see the canary is alive without
+    /// generating traffic.
+    ///
+    /// Interval is the configured base ± 20% jitter per cycle (Codex F19).
+    pub fn spawn_probe(self, runner: Option<ProbeRunner>) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
-            let interval = std::time::Duration::from_secs(self.interval_secs);
+            let base = std::time::Duration::from_secs(self.interval_secs);
+            let mut rng = StdRng::from_entropy();
+            let mut cycle: u64 = 0;
             tracing::info!(
                 interval_secs = self.interval_secs,
                 model = %self.baseline.model_label,
-                "canary probe loop started (probe payload pending PR-B.1)"
+                prompts = self.baseline.prompts.len(),
+                live = runner.is_some(),
+                "canary probe loop started"
             );
             loop {
-                tokio::time::sleep(interval).await;
-                let _ = Instant::now();
-                tracing::debug!("canary probe interval elapsed (no-op until PR-B.1)");
+                let sleep_for = jittered_interval(base, &mut rng);
+                tokio::time::sleep(sleep_for).await;
+                match runner.as_ref() {
+                    Some(r) => r.run_one_cycle(cycle).await,
+                    None => tracing::debug!(
+                        cycle,
+                        "canary probe interval elapsed (no runner; baseline is stub or upstream key missing)"
+                    ),
+                }
+                cycle = cycle.wrapping_add(1);
             }
         })
     }
@@ -270,10 +287,7 @@ mod tests {
         for _ in 0..DEFAULT_HISTORY_SIZE {
             state.record_probe(0.1).await;
         }
-        assert_eq!(
-            state.status_snapshot().await.health,
-            CanaryHealth::Degraded
-        );
+        assert_eq!(state.status_snapshot().await.health, CanaryHealth::Degraded);
         // ...then push enough healthy ones to overwrite all of them.
         for _ in 0..DEFAULT_HISTORY_SIZE {
             state.record_probe(0.95).await;

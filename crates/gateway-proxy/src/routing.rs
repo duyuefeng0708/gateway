@@ -68,9 +68,7 @@ impl Router {
     /// `select()` will always return `None`, signaling the caller to fall
     /// back to the default upstream from `GatewayConfig`.
     pub fn default_router() -> Self {
-        Self {
-            routes: Vec::new(),
-        }
+        Self { routes: Vec::new() }
     }
 
     /// Load routing configuration from a YAML file.
@@ -85,8 +83,8 @@ impl Router {
 
     /// Parse routing configuration from a YAML string.
     pub fn from_yaml(yaml: &str) -> Result<Self, String> {
-        let config: RoutingConfig = serde_yaml::from_str(yaml)
-            .map_err(|e| format!("invalid routing YAML: {e}"))?;
+        let config: RoutingConfig =
+            serde_yaml::from_str(yaml).map_err(|e| format!("invalid routing YAML: {e}"))?;
         Self::from_config(config)
     }
 
@@ -189,7 +187,9 @@ fn parse_api_format(s: &str) -> Result<ApiFormat, String> {
     match s.to_lowercase().as_str() {
         "anthropic" => Ok(ApiFormat::Anthropic),
         "openai" => Ok(ApiFormat::OpenAi),
-        other => Err(format!("unknown api_format '{other}': expected 'anthropic' or 'openai'")),
+        other => Err(format!(
+            "unknown api_format '{other}': expected 'anthropic' or 'openai'"
+        )),
     }
 }
 

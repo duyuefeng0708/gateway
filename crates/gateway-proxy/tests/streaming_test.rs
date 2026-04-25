@@ -55,10 +55,26 @@ async fn test_state_streaming(upstream_url: &str) -> gateway_proxy::AppState {
         router: gateway_proxy::Router::default_router(),
         warm: Arc::new(std::sync::atomic::AtomicBool::new(true)),
         detection_semaphore: Arc::new(tokio::sync::Semaphore::new(2)),
-        audit: gateway_anonymizer::audit::AuditHandle::spawn(tempfile::tempdir().unwrap().keep()).unwrap(),
-        hmac: Arc::new(gateway_anonymizer::hmac_digest::HmacContext::from_hex("0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20", "test").unwrap()),
-        receipts: Arc::new(gateway_proxy::receipts::ReceiptCache::with_default_capacity(tempfile::tempdir().unwrap().keep())),
-        transparency: gateway_proxy::transparency::TransparencyState::from_parts(ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]), "test".to_string(), "http://unused".to_string(), std::time::Duration::from_secs(900)),
+        audit: gateway_anonymizer::audit::AuditHandle::spawn(tempfile::tempdir().unwrap().keep())
+            .unwrap(),
+        hmac: Arc::new(
+            gateway_anonymizer::hmac_digest::HmacContext::from_hex(
+                "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+                "test",
+            )
+            .unwrap(),
+        ),
+        receipts: Arc::new(
+            gateway_proxy::receipts::ReceiptCache::with_default_capacity(
+                tempfile::tempdir().unwrap().keep(),
+            ),
+        ),
+        transparency: gateway_proxy::transparency::TransparencyState::from_parts(
+            ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]),
+            "test".to_string(),
+            "http://unused".to_string(),
+            std::time::Duration::from_secs(900),
+        ),
         canary: gateway_proxy::canary::CanaryState::stub(),
     }
 }
@@ -113,7 +129,10 @@ async fn start_sse_upstream_anthropic(
                             "text": token,
                         }
                     });
-                    body.push_str(&format!("data: {}\n\n", serde_json::to_string(&event).unwrap()));
+                    body.push_str(&format!(
+                        "data: {}\n\n",
+                        serde_json::to_string(&event).unwrap()
+                    ));
                 }
 
                 // End events.
@@ -172,7 +191,10 @@ async fn streaming_anthropic_deanonymizes_sse_events() {
             "type": "content_block_delta",
             "delta": {"type": "text_delta", "text": format!("Hello {content}!")}
         });
-        sse_body.push_str(&format!("data: {}\n\n", serde_json::to_string(&event).unwrap()));
+        sse_body.push_str(&format!(
+            "data: {}\n\n",
+            serde_json::to_string(&event).unwrap()
+        ));
         sse_body.push_str("data: [DONE]\n\n");
 
         (
@@ -214,7 +236,12 @@ async fn streaming_anthropic_deanonymizes_sse_events() {
     assert_eq!(resp.status(), StatusCode::OK);
 
     // Verify streaming headers.
-    let ct = resp.headers().get("content-type").unwrap().to_str().unwrap();
+    let ct = resp
+        .headers()
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap();
     assert_eq!(ct, "text/event-stream");
 
     assert!(resp.headers().contains_key("x-gateway-session"));
@@ -258,7 +285,10 @@ async fn streaming_openai_deanonymizes_sse_events() {
         let event = json!({
             "choices": [{"delta": {"content": format!("Reply to {content}")}}]
         });
-        sse_body.push_str(&format!("data: {}\n\n", serde_json::to_string(&event).unwrap()));
+        sse_body.push_str(&format!(
+            "data: {}\n\n",
+            serde_json::to_string(&event).unwrap()
+        ));
         sse_body.push_str("data: [DONE]\n\n");
 
         (
@@ -435,10 +465,7 @@ async fn streaming_disabled_config_falls_back_to_buffered() {
 #[tokio::test]
 async fn streaming_no_pii_passes_through_sse_unchanged() {
     // When there is no PII, the SSE tokens should pass through unmodified.
-    let tokens = vec![
-        "Hello ".to_string(),
-        "world!".to_string(),
-    ];
+    let tokens = vec!["Hello ".to_string(), "world!".to_string()];
     let (upstream_url, _handle) = start_sse_upstream_anthropic(tokens).await;
 
     let state = test_state_streaming(&upstream_url).await;
@@ -502,7 +529,11 @@ async fn streaming_response_has_gateway_headers() {
         "streaming response missing x-gateway-privacy-score header"
     );
     assert_eq!(
-        resp.headers().get("cache-control").unwrap().to_str().unwrap(),
+        resp.headers()
+            .get("cache-control")
+            .unwrap()
+            .to_str()
+            .unwrap(),
         "no-cache"
     );
 }

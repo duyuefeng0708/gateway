@@ -149,10 +149,8 @@ fn error_response(err: GatewayError) -> Response {
     )
         .into_response();
     // Ensure content-type is set.
-    resp.headers_mut().insert(
-        "content-type",
-        HeaderValue::from_static("application/json"),
-    );
+    resp.headers_mut()
+        .insert("content-type", HeaderValue::from_static("application/json"));
     resp
 }
 
@@ -270,7 +268,9 @@ async fn handle_inner(
         use std::collections::HashMap;
         let mut counts: HashMap<&str, u64> = HashMap::new();
         for span in &all_spans {
-            *counts.entry(span.pii_type.placeholder_prefix()).or_insert(0) += 1;
+            *counts
+                .entry(span.pii_type.placeholder_prefix())
+                .or_insert(0) += 1;
         }
         for (pii_type, count) in counts {
             metrics::record_pii_detected(pii_type, count);
@@ -386,8 +386,13 @@ async fn handle_inner(
         let name_str = name.as_str().to_lowercase();
         if matches!(
             name_str.as_str(),
-            "host" | "transfer-encoding" | "connection" | "content-length"
-                | "x-gateway-session" | "authorization" | "x-api-key"
+            "host"
+                | "transfer-encoding"
+                | "connection"
+                | "content-length"
+                | "x-gateway-session"
+                | "authorization"
+                | "x-api-key"
         ) {
             continue;
         }
@@ -398,8 +403,7 @@ async fn handle_inner(
     match effective_format {
         ApiFormat::OpenAi => {
             if let Ok(api_key) = std::env::var(&api_key_env) {
-                req_builder =
-                    req_builder.header("authorization", format!("Bearer {api_key}"));
+                req_builder = req_builder.header("authorization", format!("Bearer {api_key}"));
             }
         }
         ApiFormat::Anthropic => {
@@ -412,7 +416,10 @@ async fn handle_inner(
     req_builder = req_builder.body(new_body_bytes);
 
     // Detect whether the client requested streaming.
-    let is_streaming = new_body.get("stream").and_then(Value::as_bool).unwrap_or(false)
+    let is_streaming = new_body
+        .get("stream")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
         && state.config.streaming_enabled;
 
     let upstream_start = Instant::now();
@@ -440,9 +447,7 @@ async fn handle_inner(
             .await
             .map_err(GatewayError::SessionStore)?;
 
-        let deanonymizer = Arc::new(Mutex::new(
-            StreamingDeanonymizer::new(all_placeholders),
-        ));
+        let deanonymizer = Arc::new(Mutex::new(StreamingDeanonymizer::new(all_placeholders)));
 
         let byte_stream = upstream_resp.bytes_stream();
 
@@ -473,10 +478,7 @@ async fn handle_inner(
                                     if trimmed == "[DONE]" {
                                         let mut guard = deano.lock().await;
                                         if let Some(remaining) = guard.flush() {
-                                            let synth = build_sse_delta(
-                                                &remaining,
-                                                sse_format,
-                                            );
+                                            let synth = build_sse_delta(&remaining, sse_format);
                                             output_lines.push(format!("data: {synth}\n\n"));
                                         }
                                         output_lines.push("data: [DONE]\n\n".to_string());
@@ -488,16 +490,10 @@ async fn handle_inner(
 
                                         if let Some(token) = delta_text {
                                             let mut guard = deano.lock().await;
-                                            let deanonymized_chunks =
-                                                guard.process_token(&token);
-                                            let deanonymized =
-                                                deanonymized_chunks.join("");
+                                            let deanonymized_chunks = guard.process_token(&token);
+                                            let deanonymized = deanonymized_chunks.join("");
 
-                                            set_sse_delta(
-                                                &mut json,
-                                                &deanonymized,
-                                                sse_format,
-                                            );
+                                            set_sse_delta(&mut json, &deanonymized, sse_format);
                                             let json_str = serde_json::to_string(&json)
                                                 .unwrap_or_else(|_| trimmed.to_string());
                                             output_lines.push(format!("data: {json_str}\n\n"));

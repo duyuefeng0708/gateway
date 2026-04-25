@@ -144,7 +144,10 @@ impl OllamaDetector {
         let raw_spans: Vec<RawSpan> = serde_json::from_str(json_str)
             .map_err(|e| DetectionError::ModelOutputParseError(e.to_string()))?;
 
-        Ok(raw_spans.into_iter().filter_map(|s| s.into_pii_span()).collect())
+        Ok(raw_spans
+            .into_iter()
+            .filter_map(|s| s.into_pii_span())
+            .collect())
     }
 
     /// Send a chat request with timeout, returning the assistant content.

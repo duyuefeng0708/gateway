@@ -46,11 +46,7 @@ pub async fn run_with_retry(state: &AppState) {
         let attempt_num = attempt + 1;
         info!(attempt = attempt_num, "warm-up probe starting");
 
-        match state
-            .detector
-            .detect_with_metadata(WARMUP_PROMPT)
-            .await
-        {
+        match state.detector.detect_with_metadata(WARMUP_PROMPT).await {
             Ok(_) => {
                 let elapsed = start.elapsed();
                 state.warm.store(true, Ordering::Release);

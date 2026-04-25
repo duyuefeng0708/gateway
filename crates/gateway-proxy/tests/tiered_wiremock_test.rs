@@ -103,7 +103,10 @@ async fn deep_tier_500_falls_back_silently_with_error_captured() {
     );
 
     // Regex fast tier still produced a span for the email.
-    assert!(!result.spans.is_empty(), "regex span should survive fallback");
+    assert!(
+        !result.spans.is_empty(),
+        "regex span should survive fallback"
+    );
     assert!(
         result
             .spans
@@ -154,7 +157,8 @@ async fn deep_tier_success_merges_spans() {
     let server = MockServer::start().await;
 
     // Return a valid JSON array with one span from the "deep" model.
-    let deep_span_json = r#"[{"type":"PERSON","start":0,"end":4,"text":"John","confidence":0.9,"implicit":false}]"#;
+    let deep_span_json =
+        r#"[{"type":"PERSON","start":0,"end":4,"text":"John","confidence":0.9,"implicit":false}]"#;
     Mock::given(method("POST"))
         .and(path("/api/chat"))
         .respond_with(chat_response_with_json(deep_span_json))

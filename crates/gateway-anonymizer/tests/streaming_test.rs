@@ -1,5 +1,5 @@
 use gateway_anonymizer::streaming::StreamingDeanonymizer;
-use gateway_common::types::{Placeholder, PiiType};
+use gateway_common::types::{PiiType, Placeholder};
 
 fn make_placeholder(pii_type: PiiType, id: &str, original: &str) -> Placeholder {
     Placeholder {
@@ -160,5 +160,8 @@ fn all_pii_types_deanonymize_correctly() {
     );
     let out = d.process_token(input);
     let combined = out.join("");
-    assert_eq!(combined, "Alice at Acme a@b.com NYC 555-0100 111-22-3333 sk-secret");
+    assert_eq!(
+        combined,
+        "Alice at Acme a@b.com NYC 555-0100 111-22-3333 sk-secret"
+    );
 }

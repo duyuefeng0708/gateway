@@ -14,7 +14,9 @@ pub struct SseLineBuffer {
 
 impl SseLineBuffer {
     pub fn new() -> Self {
-        Self { buf: Vec::with_capacity(4096) }
+        Self {
+            buf: Vec::with_capacity(4096),
+        }
     }
 
     /// Push a chunk of bytes from the network. Returns any complete SSE

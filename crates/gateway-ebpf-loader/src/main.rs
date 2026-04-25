@@ -79,9 +79,7 @@ async fn main() -> Result<()> {
     // Initial DNS resolution.
     let resolved = resolve_endpoints(&config.endpoints).await;
     if resolved.is_empty() {
-        bail!(
-            "no endpoints could be resolved; check your DNS and endpoint configuration"
-        );
+        bail!("no endpoints could be resolved; check your DNS and endpoint configuration");
     }
     info!(
         v4_count = resolved.v4.len(),
@@ -98,7 +96,10 @@ async fn main() -> Result<()> {
     }
     for ep in &resolved.v6 {
         info!(
-            ip6 = format!("{:08x}:{:08x}:{:08x}:{:08x}", ep.ip6_be[0], ep.ip6_be[1], ep.ip6_be[2], ep.ip6_be[3]),
+            ip6 = format!(
+                "{:08x}:{:08x}:{:08x}:{:08x}",
+                ep.ip6_be[0], ep.ip6_be[1], ep.ip6_be[2], ep.ip6_be[3]
+            ),
             port = ep.port,
             "endpoint IPv6"
         );
@@ -121,9 +122,8 @@ async fn main() -> Result<()> {
     // Spawn signal handler.
     tokio::spawn(async move {
         let ctrl_c = signal::ctrl_c();
-        let mut sigterm =
-            signal::unix::signal(signal::unix::SignalKind::terminate())
-                .expect("failed to register SIGTERM handler");
+        let mut sigterm = signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("failed to register SIGTERM handler");
 
         tokio::select! {
             _ = ctrl_c => {
@@ -148,16 +148,10 @@ async fn main() -> Result<()> {
     let bpf_for_refresh = bpf_handle.clone();
 
     // Seed the tracking sets from the initial resolution.
-    let initial_known_v4: HashSet<(u32, u16)> = resolved
-        .v4
-        .iter()
-        .map(|ep| (ep.ip_be, ep.port))
-        .collect();
-    let initial_known_v6: HashSet<([u32; 4], u16)> = resolved
-        .v6
-        .iter()
-        .map(|ep| (ep.ip6_be, ep.port))
-        .collect();
+    let initial_known_v4: HashSet<(u32, u16)> =
+        resolved.v4.iter().map(|ep| (ep.ip_be, ep.port)).collect();
+    let initial_known_v6: HashSet<([u32; 4], u16)> =
+        resolved.v6.iter().map(|ep| (ep.ip6_be, ep.port)).collect();
 
     tokio::spawn(async move {
         let interval = Duration::from_secs(refresh_config.dns_refresh_interval);
@@ -345,20 +339,19 @@ fn load_ebpf(cli: &Cli, config: &LoaderConfig, resolved: &ResolvedEndpoints) -> 
     let obj_path = find_bpf_object(cli)?;
     info!(path = %obj_path.display(), "loading eBPF object");
 
-    let mut bpf = aya::Ebpf::load_file(&obj_path)
-        .map_err(|e| {
-            // Provide helpful diagnostics for common failures.
-            let hint = if e.to_string().contains("Operation not permitted") {
-                "\n\nHint: Loading eBPF programs requires CAP_BPF (or root). \
+    let mut bpf = aya::Ebpf::load_file(&obj_path).map_err(|e| {
+        // Provide helpful diagnostics for common failures.
+        let hint = if e.to_string().contains("Operation not permitted") {
+            "\n\nHint: Loading eBPF programs requires CAP_BPF (or root). \
                  Try running with: sudo gateway-ebpf-loader ..."
-            } else if e.to_string().contains("Invalid argument") {
-                "\n\nHint: The eBPF program may require a newer kernel. \
+        } else if e.to_string().contains("Invalid argument") {
+            "\n\nHint: The eBPF program may require a newer kernel. \
                  Linux 5.15+ is recommended."
-            } else {
-                ""
-            };
-            anyhow::anyhow!("failed to load eBPF program: {}{}", e, hint)
-        })?;
+        } else {
+            ""
+        };
+        anyhow::anyhow!("failed to load eBPF program: {}{}", e, hint)
+    })?;
 
     // Initialize aya-log forwarding to tracing (best-effort).
     if let Err(e) = aya_log::EbpfLogger::init(&mut bpf) {
@@ -430,11 +423,10 @@ fn load_ebpf(cli: &Cli, config: &LoaderConfig, resolved: &ResolvedEndpoints) -> 
 
 /// Populate the ENDPOINTS BPF hash map with resolved IPv4 addresses.
 fn populate_endpoint_map(bpf: &mut aya::Ebpf, resolved: &[ResolvedEndpoint]) -> Result<()> {
-    let mut endpoints_map: aya::maps::HashMap<_, EndpointKey, u8> =
-        aya::maps::HashMap::try_from(
-            bpf.map_mut("ENDPOINTS")
-                .context("ENDPOINTS map not found in eBPF object")?,
-        )?;
+    let mut endpoints_map: aya::maps::HashMap<_, EndpointKey, u8> = aya::maps::HashMap::try_from(
+        bpf.map_mut("ENDPOINTS")
+            .context("ENDPOINTS map not found in eBPF object")?,
+    )?;
 
     for ep in resolved {
         // Port in the map key must be in network byte order to match
@@ -509,19 +501,15 @@ fn update_endpoint_map_v4(
     resolved: &[ResolvedEndpoint],
     known_entries: &mut HashSet<(u32, u16)>,
 ) -> Result<()> {
-    let mut endpoints_map: aya::maps::HashMap<_, EndpointKey, u8> =
-        aya::maps::HashMap::try_from(
-            state
-                .bpf
-                .map_mut("ENDPOINTS")
-                .context("ENDPOINTS map not found")?,
-        )?;
+    let mut endpoints_map: aya::maps::HashMap<_, EndpointKey, u8> = aya::maps::HashMap::try_from(
+        state
+            .bpf
+            .map_mut("ENDPOINTS")
+            .context("ENDPOINTS map not found")?,
+    )?;
 
     // Build the new set of (ip_be, port) tuples.
-    let new_set: HashSet<(u32, u16)> = resolved
-        .iter()
-        .map(|ep| (ep.ip_be, ep.port))
-        .collect();
+    let new_set: HashSet<(u32, u16)> = resolved.iter().map(|ep| (ep.ip_be, ep.port)).collect();
 
     // Step 1: Insert all new entries.  BPF_ANY (flags=0 in aya) means
     // existing keys are overwritten silently, so duplicates are fine.
@@ -563,19 +551,16 @@ fn update_endpoint_map_v6(
     resolved: &[ResolvedEndpoint6],
     known_entries: &mut HashSet<([u32; 4], u16)>,
 ) -> Result<()> {
-    let mut endpoints_map: aya::maps::HashMap<_, Endpoint6Key, u8> =
-        aya::maps::HashMap::try_from(
-            state
-                .bpf
-                .map_mut("ENDPOINTS6")
-                .context("ENDPOINTS6 map not found")?,
-        )?;
+    let mut endpoints_map: aya::maps::HashMap<_, Endpoint6Key, u8> = aya::maps::HashMap::try_from(
+        state
+            .bpf
+            .map_mut("ENDPOINTS6")
+            .context("ENDPOINTS6 map not found")?,
+    )?;
 
     // Build the new set.
-    let new_set: HashSet<([u32; 4], u16)> = resolved
-        .iter()
-        .map(|ep| (ep.ip6_be, ep.port))
-        .collect();
+    let new_set: HashSet<([u32; 4], u16)> =
+        resolved.iter().map(|ep| (ep.ip6_be, ep.port)).collect();
 
     // Step 1: Insert all new entries.
     for ep in resolved {
