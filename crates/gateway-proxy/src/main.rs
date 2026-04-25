@@ -2,10 +2,13 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
 
+use gateway_anonymizer::audit::AuditHandle;
+use gateway_anonymizer::hmac_digest::HmacContext;
 use gateway_anonymizer::session::SessionStore;
 use gateway_anonymizer::tiered::TieredDetector;
 use gateway_common::config::GatewayConfig;
 use gateway_proxy::metrics;
+use gateway_proxy::receipts::ReceiptCache;
 use gateway_proxy::routing::Router as SmartRouter;
 use gateway_proxy::state::AppState;
 use tokio::sync::Semaphore;
@@ -63,6 +66,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         info!("smart model routing enabled");
     }
 
+    // HMAC context for receipt prompt/response digests. Codex F12 — keyed
+    // hashes defeat confirmation attacks. Key is loaded from env at boot;
+    // missing or malformed key fails loud.
+    let hmac = load_hmac_context()?;
+
+    // Async audit writer. Spawns its own thread + bounded mpsc; cheap to
+    // clone via the inner Sender. Fails loud at boot if the audit dir
+    // is already locked by a sibling writer.
+    let audit = AuditHandle::spawn(std::path::PathBuf::from(&config.audit_path))
+        .map_err(|e| format!("audit handle initialization failed: {e}"))?;
+
+    // Receipt LRU cache. Disk fallback scans config.audit_path.
+    let receipts = Arc::new(ReceiptCache::with_default_capacity(
+        std::path::PathBuf::from(&config.audit_path),
+    ));
+
     let listen_addr = config.listen_addr.clone();
     let detection_concurrency = config.detection_concurrency;
 
@@ -74,6 +93,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         router,
         warm: Arc::new(AtomicBool::new(false)),
         detection_semaphore: Arc::new(Semaphore::new(detection_concurrency)),
+        audit,
+        hmac: Arc::new(hmac),
+        receipts,
     };
 
     let app = gateway_proxy::build_server(app_state.clone());
@@ -88,4 +110,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+/// Load the HMAC key for receipt digests from env.
+///
+/// Two routes accepted:
+/// * `GATEWAY_HMAC_KEY` — hex-encoded key (>= 64 hex chars / 32 bytes).
+/// * `GATEWAY_HMAC_KEY_FILE` — path to a file containing hex-encoded key.
+///
+/// `GATEWAY_HMAC_KEY_ID` (default "primary") is the stable identifier
+/// embedded in receipts so verifiers can locate the matching key in
+/// their trust store across rotations.
+///
+/// Missing/malformed key returns a fail-loud Err so the proxy refuses
+/// to start without the receipt-digest dependency satisfied. Codex F12.
+fn load_hmac_context() -> Result<HmacContext, Box<dyn std::error::Error>> {
+    let key_hex = match std::env::var("GATEWAY_HMAC_KEY") {
+        Ok(v) => v,
+        Err(_) => {
+            let path = std::env::var("GATEWAY_HMAC_KEY_FILE").map_err(|_| {
+                "missing receipt-digest key: set GATEWAY_HMAC_KEY (hex) or GATEWAY_HMAC_KEY_FILE"
+            })?;
+            std::fs::read_to_string(&path).map_err(|e| {
+                format!("failed to read GATEWAY_HMAC_KEY_FILE {path}: {e}")
+            })?
+        }
+    };
+    let key_id = std::env::var("GATEWAY_HMAC_KEY_ID").unwrap_or_else(|_| "primary".to_string());
+    HmacContext::from_hex(key_hex.trim(), key_id).map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
 }

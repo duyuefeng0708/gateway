@@ -2,12 +2,47 @@ use chrono::Utc;
 use fs2::FileExt;
 use gateway_common::errors::AuditError;
 use gateway_common::types::{
-    AuditEntry, PiiSpan, PiiType, PrivacyScore, HASH_RECIPE_V1, HASH_RECIPE_V2_CANONICAL_JSON,
+    AnchorStatus, AuditEntry, PiiSpan, PiiType, PrivacyScore, ResponseHashStatus, HASH_RECIPE_V1,
+    HASH_RECIPE_V2_CANONICAL_JSON,
 };
 use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+
+/// Request payload for `AuditWriter::write_entry_v2` /
+/// `AuditHandle::write_entry_v2`. Carries the v2-era fields that the
+/// proxy populates from per-request context (model routing, HMAC
+/// digests, signing identity). The audit subsystem fills in chain-link
+/// fields (timestamp, prev_hash, hash, hash_recipe, anchor_status).
+#[derive(Debug, Clone)]
+pub struct AuditEntryRequest {
+    pub session_id: String,
+    pub spans: Vec<PiiSpan>,
+    pub score: PrivacyScore,
+    pub request_id: String,
+    pub client_requested_model: String,
+    pub gateway_selected_route: String,
+    pub upstream_requested_model: String,
+    pub upstream_reported_model: String,
+    pub detector_fast_model: String,
+    pub detector_deep_model: String,
+    pub prompt_hmac: String,
+    pub response_hmac: String,
+    pub hmac_key_id: String,
+    pub response_hash_status: ResponseHashStatus,
+    pub signing_key_id: String,
+    pub signature_alg: String,
+}
+
+/// Outcome of a successful write. The `request_id` is what the proxy
+/// returns in the `x-gateway-receipt` header; the `hash` is the chain
+/// head after this entry.
+#[derive(Debug, Clone)]
+pub struct AuditWriteOutcome {
+    pub request_id: String,
+    pub hash: String,
+}
 
 /// Append-only, hash-chained audit trail writer.
 ///
@@ -63,6 +98,104 @@ impl AuditWriter {
         })
     }
 
+    /// Write a richly-populated audit entry (PR-A1 path). Returns the
+    /// entry's hash and the request_id that was assigned/used.
+    ///
+    /// This is the canonical write path. The legacy `write_entry`
+    /// remains for tests and pre-PR-A1 wire-up; new request handlers
+    /// should call this instead.
+    pub fn write_entry_v2(
+        &mut self,
+        req: AuditEntryRequest,
+    ) -> Result<AuditWriteOutcome, AuditError> {
+        let now = Utc::now();
+        let request_id = if req.request_id.is_empty() {
+            uuid::Uuid::new_v4().to_string()
+        } else {
+            req.request_id.clone()
+        };
+        let pii_types: Vec<PiiType> = req.spans.iter().map(|s| s.pii_type).collect();
+
+        let mut entry = AuditEntry {
+            timestamp: now,
+            session_id: req.session_id,
+            pii_spans_detected: req.spans.len(),
+            pii_types,
+            placeholders_generated: req.spans.len(),
+            privacy_score: req.score.value(),
+            hash: String::new(),
+            prev_hash: self.last_hash.clone(),
+            hash_recipe: HASH_RECIPE_V2_CANONICAL_JSON.to_string(),
+            request_id: request_id.clone(),
+            client_requested_model: req.client_requested_model,
+            gateway_selected_route: req.gateway_selected_route,
+            upstream_requested_model: req.upstream_requested_model,
+            upstream_reported_model: req.upstream_reported_model,
+            detector_fast_model: req.detector_fast_model,
+            detector_deep_model: req.detector_deep_model,
+            prompt_hmac: req.prompt_hmac,
+            response_hmac: req.response_hmac,
+            hmac_key_id: req.hmac_key_id,
+            response_hash_status: req.response_hash_status,
+            signing_key_id: req.signing_key_id,
+            signature_alg: req.signature_alg,
+            anchor_status: AnchorStatus::NotYetAnchored,
+            rekor_uuid: String::new(),
+            log_index: -1,
+            integrated_time: 0,
+        };
+
+        entry.hash = compute_hash(&entry)?;
+        self.persist_entry(&entry, now)?;
+        self.last_hash = entry.hash.clone();
+        Ok(AuditWriteOutcome {
+            request_id,
+            hash: entry.hash,
+        })
+    }
+
+    /// Internal: serialise + append + sync_data. Shared by both write_entry
+    /// (legacy) and write_entry_v2 (PR-A1).
+    fn persist_entry(&self, entry: &AuditEntry, now: chrono::DateTime<Utc>) -> Result<(), AuditError> {
+        let log_path = self
+            .dir
+            .join(format!("{}.jsonl", now.format("%Y-%m-%d")));
+
+        let line =
+            serde_json::to_string(entry).map_err(|e| AuditError::WriteError(e.to_string()))?;
+
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::StorageFull
+                    || e.to_string().contains("No space left")
+                {
+                    AuditError::AuditDiskFull
+                } else {
+                    AuditError::WriteError(e.to_string())
+                }
+            })?;
+
+        writeln!(file, "{line}").map_err(|e| {
+            if e.to_string().contains("No space left") {
+                AuditError::AuditDiskFull
+            } else {
+                AuditError::WriteError(e.to_string())
+            }
+        })?;
+
+        file.sync_data().map_err(|e| {
+            if e.to_string().contains("No space left") {
+                AuditError::AuditDiskFull
+            } else {
+                AuditError::WriteError(e.to_string())
+            }
+        })?;
+        Ok(())
+    }
+
     /// Write an audit entry for a request. Returns the entry's hash.
     pub fn write_entry(
         &mut self,
@@ -91,6 +224,12 @@ impl AuditWriter {
             // New entries always use the v2 recipe; v1 only exists in
             // legacy files that were written before this commit.
             hash_recipe: HASH_RECIPE_V2_CANONICAL_JSON.to_string(),
+            // V2 fields (PR-A1) populated via the new write_entry_v2
+            // path; this legacy entry-point fills them with defaults so
+            // existing tests and the proxy's pre-PR-A1 wire-up continue
+            // to compile. Real callers go through AuditHandle which
+            // accepts the rich AuditEntryRequest.
+            ..AuditEntry::default()
         };
 
         // Compute hash over the entry content (excluding the hash field
@@ -326,6 +465,14 @@ enum AuditCommand {
         score: PrivacyScore,
         reply: tokio::sync::oneshot::Sender<Result<String, AuditError>>,
     },
+    WriteEntryV2 {
+        // Boxed because AuditEntryRequest is much larger than the v1 variant
+        // and clippy rightly flags the variant-size disparity. The Box keeps
+        // the channel-level enum small and the heap allocation is negligible
+        // next to the disk fsync that follows.
+        req: Box<AuditEntryRequest>,
+        reply: tokio::sync::oneshot::Sender<Result<AuditWriteOutcome, AuditError>>,
+    },
 }
 
 /// Async-friendly handle to a dedicated audit writer thread.
@@ -378,8 +525,10 @@ impl AuditHandle {
                             reply,
                         } => {
                             let result = writer.write_entry(&session_id, &spans, score);
-                            // Receiver may have dropped if the request was
-                            // cancelled. Not an error; just discard.
+                            let _ = reply.send(result);
+                        }
+                        AuditCommand::WriteEntryV2 { req, reply } => {
+                            let result = writer.write_entry_v2(*req);
                             let _ = reply.send(result);
                         }
                     }
@@ -422,6 +571,24 @@ impl AuditHandle {
         // The writer always sends a reply on the oneshot. If the receiver
         // here errors, the writer thread died between the queue and the
         // reply.
+        reply_rx.await.map_err(|_| AuditError::WriterDown)?
+    }
+
+    /// PR-A1 path: submit an `AuditEntryRequest` carrying all v2 fields.
+    /// Returns the assigned request_id and the chain hash.
+    pub async fn write_entry_v2(
+        &self,
+        req: AuditEntryRequest,
+    ) -> Result<AuditWriteOutcome, AuditError> {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        let cmd = AuditCommand::WriteEntryV2 {
+            req: Box::new(req),
+            reply: reply_tx,
+        };
+        self.tx.try_send(cmd).map_err(|e| match e {
+            tokio::sync::mpsc::error::TrySendError::Full(_) => AuditError::Backpressured,
+            tokio::sync::mpsc::error::TrySendError::Closed(_) => AuditError::WriterDown,
+        })?;
         reply_rx.await.map_err(|_| AuditError::WriterDown)?
     }
 }
@@ -654,6 +821,7 @@ mod tests {
             hash: String::new(),
             prev_hash: "0".repeat(64),
             hash_recipe: HASH_RECIPE_V1.to_string(),
+            ..AuditEntry::default()
         };
         entry.hash = compute_hash_v1(&entry);
 
@@ -683,6 +851,7 @@ mod tests {
             hash: String::new(),
             prev_hash: "0".repeat(64),
             hash_recipe: HASH_RECIPE_V1.to_string(),
+            ..AuditEntry::default()
         };
         entry.hash = compute_hash_v1(&entry);
         let line = serde_json::to_string(&entry).unwrap();
@@ -732,6 +901,7 @@ mod tests {
             hash: String::new(),
             prev_hash: "0".repeat(64),
             hash_recipe: HASH_RECIPE_V1.to_string(),
+            ..AuditEntry::default()
         };
         v1.hash = compute_hash_v1(&v1);
 
@@ -745,6 +915,7 @@ mod tests {
             hash: String::new(),
             prev_hash: v1.hash.clone(),
             hash_recipe: HASH_RECIPE_V2_CANONICAL_JSON.to_string(),
+            ..AuditEntry::default()
         };
         v2.hash = compute_hash_v2_canonical_json(&v2).unwrap();
 
@@ -777,6 +948,7 @@ mod tests {
             hash: String::new(),
             prev_hash: "0".repeat(64),
             hash_recipe: HASH_RECIPE_V1.to_string(),
+            ..AuditEntry::default()
         };
         entry.hash = compute_hash_v1(&entry);
 
@@ -812,6 +984,7 @@ mod tests {
                 hash: String::new(),
                 prev_hash: prev.clone(),
                 hash_recipe: HASH_RECIPE_V2_CANONICAL_JSON.to_string(),
+            ..AuditEntry::default()
             };
             entry.hash = compute_hash_v2_canonical_json(&entry).unwrap();
             prev = entry.hash.clone();

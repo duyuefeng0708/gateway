@@ -1,6 +1,7 @@
 pub mod audit;
 pub mod detector;
 pub mod eval;
+pub mod hmac_digest;
 pub mod ollama;
 pub mod placeholder;
 pub mod regex_detector;

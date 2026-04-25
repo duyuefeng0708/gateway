@@ -20,6 +20,7 @@ ollama-rs.workspace = true
 async-trait.workspace = true
 rusqlite.workspace = true
 fs2 = "0.4"
+hmac = "0.12"
 
 [dev-dependencies]
 assert_matches.workspace = true

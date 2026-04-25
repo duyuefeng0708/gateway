@@ -323,6 +323,62 @@ async fn handle_inner(
         (url, api_format, key_env)
     };
 
+    // -- Receipt write (PR-A1) ----------------------------------------------
+    //
+    // Write the audit entry now: we know the routing decision, the
+    // post-redaction prompt body, and the placeholder-bearing rebuild.
+    // We do NOT yet know the upstream-reported model or the response
+    // body — those land via a follow-up audit update once the response
+    // is received (currently P2 since the audit log is append-only and
+    // the audit subsystem doesn't support entry-update yet).
+    //
+    // The receipt is emitted via the x-gateway-receipt header on the
+    // forwarded response. response_hash_status starts as Pending and
+    // stays that way for both streaming and non-streaming requests in
+    // PR-A1; finalising it lands in PR-A2.
+    let prompt_hmac = state.hmac.digest(&new_body_bytes);
+    let client_requested_model = new_body
+        .get("model")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let gateway_selected_route = route_target
+        .as_ref()
+        .map(|t| t.route_name.clone())
+        .unwrap_or_default();
+
+    let audit_request = gateway_anonymizer::audit::AuditEntryRequest {
+        session_id: session_id.clone(),
+        spans: all_spans.clone(),
+        score: privacy_score,
+        request_id: String::new(), // assigned by AuditWriter
+        client_requested_model: client_requested_model.clone(),
+        gateway_selected_route,
+        upstream_requested_model: client_requested_model,
+        upstream_reported_model: String::new(), // P2: filled on response
+        detector_fast_model: state.config.fast_model.clone(),
+        detector_deep_model: state.config.deep_model.clone(),
+        prompt_hmac,
+        response_hmac: String::new(), // P2: rolling HMAC over response stream
+        hmac_key_id: state.hmac.key_id.clone(),
+        response_hash_status: gateway_common::types::ResponseHashStatus::Pending,
+        signing_key_id: String::new(), // populated when transparency state is wired
+        signature_alg: String::new(),
+    };
+
+    let receipt_id = match state.audit.write_entry_v2(audit_request).await {
+        Ok(outcome) => {
+            // Cache for fast lookup at GET /v1/receipts/{id}.
+            // The full entry isn't returned by write_entry_v2; we'll let
+            // the disk-fallback path populate the cache on first lookup.
+            outcome.request_id
+        }
+        Err(e) => {
+            warn!(error = %e, "audit write failed; continuing without receipt");
+            String::new()
+        }
+    };
+
     let mut req_builder = state.http_client.post(&upstream_url);
 
     // Copy original headers, skipping hop-by-hop and host.
@@ -494,6 +550,9 @@ async fn handle_inner(
             "x-gateway-privacy-score",
             format_privacy_header(&privacy_score),
         );
+        if !receipt_id.is_empty() {
+            builder = builder.header("x-gateway-receipt", &receipt_id);
+        }
 
         let response = builder
             .body(stream_body)
@@ -548,6 +607,9 @@ async fn handle_inner(
             "x-gateway-privacy-score",
             format_privacy_header(&privacy_score),
         );
+        if !receipt_id.is_empty() {
+            builder = builder.header("x-gateway-receipt", &receipt_id);
+        }
 
         let response = builder
             .body(axum::body::Body::from(deanonymized.into_bytes()))
