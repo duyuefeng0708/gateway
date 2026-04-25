@@ -90,6 +90,32 @@ pub struct SessionMapping {
     pub created_at: DateTime<Utc>,
 }
 
+/// Status of an audit entry's response hash. Streaming responses can't
+/// finalise the hash until the stream completes, so receipts emitted
+/// during streaming declare `pending` and are upgraded to `final` once
+/// the response body is fully consumed. Codex F9.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ResponseHashStatus {
+    #[default]
+    Final,
+    Pending,
+}
+
+/// Status of a transparency-log anchor for an audit entry. Receipts are
+/// returned to clients as soon as the entry is written, often before the
+/// next batched Rekor checkpoint. Anchoring is best-effort against a
+/// public-good service with a 99.5% SLO; receipts must verify offline
+/// first and report anchor state explicitly. Codex F15.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AnchorStatus {
+    #[default]
+    NotYetAnchored,
+    Anchored,
+    AnchorFailed,
+}
+
 /// A single entry in the hash-chained audit trail.
 ///
 /// `hash_recipe` controls how `hash` was computed. Legacy entries written
@@ -99,6 +125,13 @@ pub struct SessionMapping {
 /// `audit-v2-canonical-json`, which authenticates every field except
 /// `hash` itself, eliminating the previous unauthenticated-field gap
 /// (Codex F2 + F3 from the 2026-04-25 plan-eng-review).
+///
+/// All fields added since the v2 recipe landed carry `#[serde(default)]`
+/// so that ANY future on-disk entry written under v2 verifies under
+/// canonical-JSON-of-the-current-struct without forking the chain on
+/// older deployments. The hash is computed over the entry's serialised
+/// canonical JSON minus the `hash` field, which is independent of which
+/// fields a particular writer chose to populate.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuditEntry {
     pub timestamp: DateTime<Utc>,
@@ -113,6 +146,136 @@ pub struct AuditEntry {
     /// in legacy on-disk entries (deserialises as `audit-v1`).
     #[serde(default = "default_hash_recipe")]
     pub hash_recipe: String,
+
+    // ---- v2 fields added 2026-04-25 (PR-A1) -----------------------------
+    /// Per-request UUID. Used as the receipt identifier; clients receive
+    /// it in the `x-gateway-receipt` response header and look up the full
+    /// receipt at `/v1/receipts/{request_id}`. Codex F11.
+    #[serde(default)]
+    pub request_id: String,
+
+    /// Model name the client originally requested in their JSON body.
+    /// Disambiguates from the upstream-routed model under smart routing.
+    #[serde(default)]
+    pub client_requested_model: String,
+
+    /// Smart-router decision: which configured route was selected
+    /// (e.g. "anthropic-direct", "anonymized-cheap"). Empty if no
+    /// routing config is in effect.
+    #[serde(default)]
+    pub gateway_selected_route: String,
+
+    /// Model name actually sent to the upstream after routing. Equals
+    /// client_requested_model when smart routing is off.
+    #[serde(default)]
+    pub upstream_requested_model: String,
+
+    /// Model name the upstream returned in its response body.
+    /// Sometimes diverges from upstream_requested_model when the
+    /// upstream silently routes between model versions.
+    #[serde(default)]
+    pub upstream_reported_model: String,
+
+    /// Fast-tier detector model name (e.g. "gemma4:e4b").
+    #[serde(default)]
+    pub detector_fast_model: String,
+
+    /// Deep-tier detector model name when configured (e.g. "gemma4:26b").
+    #[serde(default)]
+    pub detector_deep_model: String,
+
+    /// HMAC-SHA256 of the post-redaction (placeholder-bearing) prompt.
+    /// Hex-encoded. Empty when no PII was detected and the prompt was
+    /// forwarded verbatim. Codex F12: keyed digest defeats confirmation
+    /// attacks against bare hashes.
+    #[serde(default)]
+    pub prompt_hmac: String,
+
+    /// HMAC-SHA256 of the pre-deanon (placeholder-bearing) upstream
+    /// response. For streaming responses this is the rolling HMAC
+    /// finalised at stream end; `response_hash_status` indicates which.
+    #[serde(default)]
+    pub response_hmac: String,
+
+    /// Stable identifier for the HMAC key used. Verifiers fetch the key
+    /// from a trust store keyed by this id. Rotation: deploy a new key
+    /// with a new id; old receipts continue to validate against the
+    /// archived key by id.
+    #[serde(default)]
+    pub hmac_key_id: String,
+
+    /// Whether `response_hmac` is the final value or still being
+    /// rolled. See `ResponseHashStatus` doc.
+    #[serde(default)]
+    pub response_hash_status: ResponseHashStatus,
+
+    /// Identifier of the Ed25519 key that signs this entry's batch
+    /// when it gets anchored to Rekor. Rotation safety: archive old
+    /// public keys forever.
+    #[serde(default)]
+    pub signing_key_id: String,
+
+    /// Signature algorithm name (e.g. "ed25519"). Forward-compat for
+    /// future post-quantum signatures.
+    #[serde(default)]
+    pub signature_alg: String,
+
+    /// Anchoring status as of receipt emission. Anchoring is async; a
+    /// fresh receipt almost always says `not_yet_anchored`. Subsequent
+    /// receipt lookups return updated status as the publisher catches up.
+    #[serde(default)]
+    pub anchor_status: AnchorStatus,
+
+    /// Rekor entry UUID once the batch containing this entry has been
+    /// anchored. Empty until then.
+    #[serde(default)]
+    pub rekor_uuid: String,
+
+    /// Rekor log index. -1 sentinel until anchored.
+    #[serde(default = "default_log_index")]
+    pub log_index: i64,
+
+    /// Rekor integrated_time (unix seconds) when the batch was accepted.
+    /// 0 until anchored.
+    #[serde(default)]
+    pub integrated_time: u64,
+}
+
+pub(crate) fn default_log_index() -> i64 {
+    -1
+}
+
+impl Default for AuditEntry {
+    fn default() -> Self {
+        Self {
+            timestamp: DateTime::<Utc>::from_timestamp(0, 0).unwrap_or_else(Utc::now),
+            session_id: String::new(),
+            pii_spans_detected: 0,
+            pii_types: Vec::new(),
+            placeholders_generated: 0,
+            privacy_score: 100,
+            hash: String::new(),
+            prev_hash: "0".repeat(64),
+            hash_recipe: HASH_RECIPE_V2_CANONICAL_JSON.to_string(),
+            request_id: String::new(),
+            client_requested_model: String::new(),
+            gateway_selected_route: String::new(),
+            upstream_requested_model: String::new(),
+            upstream_reported_model: String::new(),
+            detector_fast_model: String::new(),
+            detector_deep_model: String::new(),
+            prompt_hmac: String::new(),
+            response_hmac: String::new(),
+            hmac_key_id: String::new(),
+            response_hash_status: ResponseHashStatus::Final,
+            signing_key_id: String::new(),
+            signature_alg: String::new(),
+            anchor_status: AnchorStatus::NotYetAnchored,
+            rekor_uuid: String::new(),
+            log_index: -1,
+            integrated_time: 0,
+        }
+    }
 }
 
 pub(crate) fn default_hash_recipe() -> String {

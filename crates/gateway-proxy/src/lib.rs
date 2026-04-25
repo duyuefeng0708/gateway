@@ -3,15 +3,18 @@ pub mod handler;
 pub mod metrics;
 pub mod privacy_api;
 pub mod readiness;
+pub mod receipts;
 pub mod routing;
 pub mod sse_buffer;
 pub mod state;
+pub mod transparency;
 pub mod warmup;
 
 pub use handler::handle_proxy_request;
 pub use metrics::metrics_handler;
 pub use privacy_api::{anonymize, deanonymize};
 pub use readiness::ready_handler;
+pub use receipts::receipts_handler;
 pub use routing::Router;
 pub use state::AppState;
 
@@ -25,6 +28,7 @@ pub fn build_server(state: AppState) -> axum::Router {
     axum::Router::new()
         .route("/v1/anonymize", post(anonymize))
         .route("/v1/deanonymize", post(deanonymize))
+        .route("/v1/receipts/{id}", get(receipts_handler))
         .route("/metrics", get(metrics_handler))
         .route("/ready", get(ready_handler))
         .fallback(handle_proxy_request)

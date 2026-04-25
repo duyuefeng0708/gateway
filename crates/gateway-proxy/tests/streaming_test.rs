@@ -55,6 +55,9 @@ async fn test_state_streaming(upstream_url: &str) -> gateway_proxy::AppState {
         router: gateway_proxy::Router::default_router(),
         warm: Arc::new(std::sync::atomic::AtomicBool::new(true)),
         detection_semaphore: Arc::new(tokio::sync::Semaphore::new(2)),
+        audit: gateway_anonymizer::audit::AuditHandle::spawn(tempfile::tempdir().unwrap().keep()).unwrap(),
+        hmac: Arc::new(gateway_anonymizer::hmac_digest::HmacContext::from_hex("0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20", "test").unwrap()),
+        receipts: Arc::new(gateway_proxy::receipts::ReceiptCache::with_default_capacity(tempfile::tempdir().unwrap().keep())),
     }
 }
 

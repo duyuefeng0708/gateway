@@ -34,6 +34,13 @@ metrics-exporter-prometheus.workspace = true
 serde_yaml.workspace = true
 bytes = "1"
 futures-util = "0.3"
+lru = "0.12"
+ed25519-dalek = { version = "2", features = ["pem", "rand_core"] }
+rs_merkle = "1"
+sha2.workspace = true
+base64 = "0.22"
+hex = "0.4"
+rand = "0.8"
 
 [dev-dependencies]
 assert_matches.workspace = true
@@ -41,3 +48,8 @@ tokio = { workspace = true, features = ["test-util"] }
 wiremock = "0.6"
 temp-env = "0.3"
 ollama-rs.workspace = true
+ed25519-dalek = { version = "2", features = ["pem", "rand_core"] }
+rand = "0.8"
+base64 = "0.22"
+hex = "0.4"
+tempfile = "3"

@@ -143,6 +143,27 @@ pub fn record_warmup_duration_secs(seconds: f64) {
 }
 
 // ---------------------------------------------------------------------------
+// Transparency-log publisher metrics. See `transparency/state.rs`.
+//
+// `kind` is a fixed-cardinality label drawn from the publisher's failure
+// taxonomy: server_error | network | signing | merkle | other. Values come
+// from code (never user input) so cardinality stays bounded.
+// ---------------------------------------------------------------------------
+
+/// Increment the transparency publish-failure counter, labelled by failure
+/// kind.
+pub fn record_transparency_publish_failed(kind: &'static str) {
+    counter!("gateway_transparency_publish_failed_total", "kind" => kind).increment(1);
+}
+
+/// Set the gauge tracking how long ago (in seconds) the last successful
+/// transparency anchor was integrated into Rekor. Operators alert on this
+/// climbing past several anchor intervals.
+pub fn set_transparency_last_publish_age(seconds: f64) {
+    gauge!("gateway_transparency_last_publish_age_seconds").set(seconds);
+}
+
+// ---------------------------------------------------------------------------
 // GET /metrics handler
 // ---------------------------------------------------------------------------
 
