@@ -11,7 +11,7 @@ use gateway_proxy::metrics;
 use gateway_proxy::receipts::ReceiptCache;
 use gateway_proxy::routing::Router as SmartRouter;
 use gateway_proxy::state::AppState;
-use gateway_proxy::canary::CanaryState;
+use gateway_proxy::canary::{CanaryState, ProbeRunner};
 use gateway_proxy::transparency::TransparencyState;
 use tokio::sync::Semaphore;
 use tracing::info;
@@ -107,7 +107,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // baseline means no comparison, and we don't want to gate boot on
     // a file the operator hasn't generated yet).
     let canary = load_canary_state();
-    let _canary_probe_handle = canary.clone().spawn_probe();
+    let probe_runner = build_probe_runner(&canary, &http_client, &config.upstream_url);
+    let _canary_probe_handle = canary.clone().spawn_probe(probe_runner);
 
     let listen_addr = config.listen_addr.clone();
     let detection_concurrency = config.detection_concurrency;
@@ -167,6 +168,42 @@ fn load_hmac_context() -> Result<HmacContext, Box<dyn std::error::Error>> {
     };
     let key_id = std::env::var("GATEWAY_HMAC_KEY_ID").unwrap_or_else(|_| "primary".to_string());
     HmacContext::from_hex(key_hex.trim(), key_id).map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+}
+
+/// Build a [`ProbeRunner`] for the canary loop, or `None` if the live
+/// probe should be a no-op (no API key, or empty baseline).
+///
+/// PR-B.1 — the runner needs an Anthropic API key + at least one
+/// prompt in the baseline. Missing either is a normal posture, not an
+/// error: the operator may have intentionally skipped baseline bootstrap
+/// (e.g. running fully offline), or the proxy is configured for the
+/// OpenAI upstream which the canary doesn't yet support. In both cases
+/// the loop still ticks but doesn't fire HTTP — `/v1/canary/status`
+/// stays `unknown`.
+fn build_probe_runner(
+    canary: &CanaryState,
+    http_client: &reqwest::Client,
+    upstream_url: &str,
+) -> Option<ProbeRunner> {
+    if canary.baseline().prompts.is_empty() {
+        tracing::info!("canary probe runner not built: baseline has no prompts");
+        return None;
+    }
+    let api_key = match std::env::var("ANTHROPIC_API_KEY") {
+        Ok(k) if !k.is_empty() => k,
+        _ => {
+            tracing::info!(
+                "canary probe runner not built: ANTHROPIC_API_KEY missing (probe loop will tick but not fire HTTP)"
+            );
+            return None;
+        }
+    };
+    Some(ProbeRunner::new(
+        http_client.clone(),
+        upstream_url.to_string(),
+        api_key,
+        canary.clone(),
+    ))
 }
 
 /// Load canary state from a baseline file or fall back to a stub.

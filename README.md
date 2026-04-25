@@ -276,9 +276,9 @@ Operators should alert on `gateway_transparency_last_publish_age_seconds` exceed
 
 ## Canary fingerprint
 
-A second verifiability layer (PR-B in the roadmap): periodically compare the upstream's responses against a fingerprint of a known-good Anthropic session. Drift in any of four signals — output similarity, response length bucket, stop reason, latency bucket — collapses the aggregate confidence and flips `GET /v1/canary/status` to `degraded`. Designed to detect silent upstream model swaps within ~5 minutes (per Codex F18).
+A second verifiability layer: periodically compare the upstream's responses against a fingerprint of a known-good Anthropic session. Drift in any of four signals — output similarity, response length bucket, stop reason, latency bucket — collapses the aggregate confidence and flips `GET /v1/canary/status` to `degraded`. Designed to detect silent upstream model swaps within ~5 minutes (per Codex F18).
 
-The runtime probe payload (live HTTP calls against the upstream) lands in PR-B.1; this PR ships the framework: feature scoring, baseline file format, status surface, and the `gateway canary` CLI. The probe loop runs on schedule but is a no-op until PR-B.1 wires the live request.
+The probe loop ticks every `GATEWAY_CANARY_INTERVAL` (default 900s) with ±20% jitter and pulls one prompt per cycle from a daily-shuffled order. Daily seeding (Codex F19) means an attacker can't pre-bake responses to a fixed prompt; jitter prevents simple timing detection. The probe runs only when `ANTHROPIC_API_KEY` is set and the loaded baseline has prompts; otherwise it ticks but doesn't fire HTTP and `/v1/canary/status` stays `unknown`.
 
 ### Status endpoint
 
@@ -293,17 +293,19 @@ GET /v1/canary/status
 }
 ```
 
-`health` is **coarse on purpose** — Codex F17 flagged that exposing per-feature scores or raw probe output here would let an attacker tune a spoof. Operators who need detail consult the metrics surface (`gateway_upstream_fingerprint_confidence` gauge, future PR-B.1) or the local logs.
+`health` is **coarse on purpose** — Codex F17 flagged that exposing per-feature scores or raw probe output here would let an attacker tune a spoof. Operators who need detail consult the local logs (probe successes log at `debug`, failures at `warn`).
 
 ### Bootstrap a baseline
 
 The repo ships an empty placeholder at `eval/canary_baseline.json` so a fresh boot doesn't fail loud. Generate a real baseline by running `gateway canary bootstrap` against your known-good upstream:
 
 ```bash
-# Stub mode (PR-B): captures the prompt bank with synthetic fingerprints.
+# Stub mode: captures the prompt bank with synthetic fingerprints. Useful
+# for CI smoke tests and proxy boots that don't have an API key.
 gateway canary bootstrap --model-label claude-sonnet-4-20250514 --stub --output eval/canary_baseline.json
 
-# (PR-B.1) Real bootstrap will hit the configured upstream:
+# Real bootstrap: hits the configured upstream once per prompt, captures
+# the live fingerprints. Requires ANTHROPIC_API_KEY.
 gateway canary bootstrap --model-label claude-sonnet-4-20250514
 ```
 

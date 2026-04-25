@@ -24,12 +24,29 @@ Four PRs landed end-to-end across the day. The verifiability story
 
 Tests: 318 → 377 (+59). Clippy clean throughout.
 
-## Open verifiability items (P2 / PR-B.1)
+## Shipped 2026-04-25 — PR-B.1 (runtime probe payload)
 
-* **PR-B.1 — runtime probe payload.** The canary probe loop runs but
-  is a no-op until live HTTP calls against the configured upstream
-  are wired. Adds the daily-seeded jitter prompt selection. Blocks
-  the "5-minute swap detection" promise from being real.
+The canary loop now sends real upstream calls. Codex F19 closed.
+
+* New `crates/gateway-proxy/src/canary/probe.rs` — `ProbeRunner` builds
+  Anthropic `/v1/messages` request, parses response, computes
+  `ProbeFingerprint`, scores via `features::composite`.
+* Daily-seeded prompt rotation: `pick_prompt(prompts, daily_seed, cycle)`
+  shuffles deterministically per ISO day; cycles within a day walk
+  through the same shuffled order; cross-day order rotates so an
+  adversary can't pre-bake responses to a fixed prompt.
+* ±20% interval jitter on every cycle (`jittered_interval`).
+* `gateway canary bootstrap` now hits a real upstream when `--stub`
+  isn't set. Same prompt suite as the runtime probe. Operator review
+  text printed alongside the success message (Codex F16).
+* `main.rs` wires a `ProbeRunner` only when `ANTHROPIC_API_KEY` is set
+  AND the baseline has prompts. Missing either falls back to the
+  no-op loop posture introduced in PR-B.
+
+Tests: 392 (+15). Clippy clean.
+
+## Open verifiability items (P2)
+
 * **F9 — streaming response_hmac finalisation.** Today response_hmac
   is empty for both streaming and non-streaming requests; the rolling
   HMAC over the response stream needs to write back to the audit

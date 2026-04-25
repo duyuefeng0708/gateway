@@ -66,7 +66,7 @@ async fn main() {
             }
         }
         Commands::Canary(args) => {
-            if let Err(e) = canary::run(args) {
+            if let Err(e) = canary::run(args).await {
                 eprintln!("{e}");
                 std::process::exit(1);
             }
