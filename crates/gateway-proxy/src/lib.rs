@@ -17,6 +17,7 @@ pub use readiness::ready_handler;
 pub use receipts::receipts_handler;
 pub use routing::Router;
 pub use state::AppState;
+pub use transparency::head_handler as transparency_head_handler;
 
 use axum::routing::{get, post};
 
@@ -29,6 +30,7 @@ pub fn build_server(state: AppState) -> axum::Router {
         .route("/v1/anonymize", post(anonymize))
         .route("/v1/deanonymize", post(deanonymize))
         .route("/v1/receipts/{id}", get(receipts_handler))
+        .route("/v1/transparency/head", get(transparency_head_handler))
         .route("/metrics", get(metrics_handler))
         .route("/ready", get(ready_handler))
         .fallback(handle_proxy_request)

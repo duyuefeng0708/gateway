@@ -11,6 +11,7 @@ use gateway_proxy::metrics;
 use gateway_proxy::receipts::ReceiptCache;
 use gateway_proxy::routing::Router as SmartRouter;
 use gateway_proxy::state::AppState;
+use gateway_proxy::transparency::TransparencyState;
 use tokio::sync::Semaphore;
 use tracing::info;
 
@@ -82,6 +83,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::path::PathBuf::from(&config.audit_path),
     ));
 
+    // Transparency state: holds Ed25519 signing key + Rekor anchor queue.
+    // Constructed before main loop so a missing/malformed signing key
+    // fails the boot sequence loud, alongside HMAC validation. Codex F13.
+    let transparency = TransparencyState::from_env()
+        .map_err(|e| format!("transparency state initialization failed: {e}"))?;
+
+    // Spawn the periodic Rekor anchor publisher. Detached for the
+    // lifetime of the proxy; it sleeps `GATEWAY_REKOR_ANCHOR_INTERVAL`
+    // (default 15m) between cycles and POSTs a Merkle-rooted batch
+    // when there are pending heads. Failures surface via metrics; the
+    // proxy keeps serving traffic regardless. Codex F14, F15.
+    let _publisher_handle = transparency.spawn_publisher();
+    info!(
+        rekor_url = %std::env::var("GATEWAY_REKOR_URL").unwrap_or_else(|_| "https://rekor.sigstore.dev".to_string()),
+        "transparency anchor publisher started"
+    );
+
     let listen_addr = config.listen_addr.clone();
     let detection_concurrency = config.detection_concurrency;
 
@@ -96,6 +114,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         audit,
         hmac: Arc::new(hmac),
         receipts,
+        transparency,
     };
 
     let app = gateway_proxy::build_server(app_state.clone());

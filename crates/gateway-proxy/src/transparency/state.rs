@@ -176,6 +176,20 @@ impl TransparencyState {
         }
     }
 
+    /// Identifier of the Ed25519 signing key. Plumbed into every
+    /// receipt so verifiers can pick the right public key from a trust
+    /// store across rotations. Cheap O(1) string clone.
+    pub fn signing_key_id(&self) -> String {
+        self.signing_key_id.as_ref().clone()
+    }
+
+    /// Signature algorithm name (e.g. "ed25519"). Constant today; kept
+    /// as a method so a post-quantum migration can switch without
+    /// changing the call sites.
+    pub fn signature_alg(&self) -> &'static str {
+        SIGNATURE_ALG
+    }
+
     /// Take a snapshot for the head route. Cheap; only acquires the mutex
     /// briefly to clone the relevant fields.
     pub async fn current_head(&self) -> HeadSnapshot {

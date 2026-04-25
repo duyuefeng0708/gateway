@@ -22,3 +22,18 @@ pub mod rekor;
 pub mod state;
 
 pub use state::{HeadSnapshot, TransparencyError, TransparencyState};
+
+use axum::extract::State;
+use axum::response::IntoResponse;
+use axum::Json;
+
+use crate::state::AppState;
+
+/// `GET /v1/transparency/head` — return the current chain head + last
+/// anchored hash + how stale the anchor is. Operators alert on
+/// `last_publish_age_seconds` outgrowing the configured anchor interval
+/// by a wide margin.
+pub async fn head_handler(State(state): State<AppState>) -> impl IntoResponse {
+    let snapshot = state.transparency.current_head().await;
+    Json(snapshot)
+}

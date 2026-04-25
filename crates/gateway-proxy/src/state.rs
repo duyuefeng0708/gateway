@@ -10,6 +10,7 @@ use tokio::sync::Semaphore;
 
 use crate::receipts::ReceiptCache;
 use crate::routing::Router;
+use crate::transparency::TransparencyState;
 
 /// Shared application state passed to every Axum handler via `State(...)`.
 ///
@@ -40,4 +41,10 @@ pub struct AppState {
     /// Receipt LRU cache. Hot path on `GET /v1/receipts/{id}`. Cache
     /// miss falls back to scanning today's then yesterday's audit jsonl.
     pub receipts: Arc<ReceiptCache>,
+    /// Transparency-log anchor state. Holds the Ed25519 signing key,
+    /// the queue of pending chain heads, and the latest published Rekor
+    /// receipt fields. Cheap to clone (wraps Arc internally). The
+    /// publisher task handle lives in main.rs and is detached for the
+    /// lifetime of the process. PR-A1.5.
+    pub transparency: TransparencyState,
 }

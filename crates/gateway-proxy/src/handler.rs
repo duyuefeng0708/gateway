@@ -362,15 +362,15 @@ async fn handle_inner(
         response_hmac: String::new(), // P2: rolling HMAC over response stream
         hmac_key_id: state.hmac.key_id.clone(),
         response_hash_status: gateway_common::types::ResponseHashStatus::Pending,
-        signing_key_id: String::new(), // populated when transparency state is wired
-        signature_alg: String::new(),
+        signing_key_id: state.transparency.signing_key_id(),
+        signature_alg: state.transparency.signature_alg().to_string(),
     };
 
     let receipt_id = match state.audit.write_entry_v2(audit_request).await {
         Ok(outcome) => {
-            // Cache for fast lookup at GET /v1/receipts/{id}.
-            // The full entry isn't returned by write_entry_v2; we'll let
-            // the disk-fallback path populate the cache on first lookup.
+            // Queue the new chain head for the next Rekor anchor cycle.
+            // Best-effort: a slow Rekor doesn't block the proxy. Codex F14.
+            state.transparency.record_head(outcome.hash.clone()).await;
             outcome.request_id
         }
         Err(e) => {
