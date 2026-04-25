@@ -4,7 +4,49 @@ Generated 2026-04-22 from `/plan-ceo-review`. Updated 2026-04-25 with verifiabil
 
 ---
 
-## P1 — Verifiability (planned 2026-04-25, three sequential PRs)
+## Shipped 2026-04-25 — verifiability roadmap
+
+Four PRs landed end-to-end across the day. The verifiability story
+("auditable by anyone") is now shippable in production.
+
+* **PR #6 (PR-A0)** — Audit hardening. verify_chain recomputes, hash
+  recipe canonical-JSON, single Utc::now, sync_data, file lock, async
+  AuditHandle. Codex F1-F8.
+* **PR #7 (PR-A1 partial)** — Wire AuditHandle into request path,
+  HMAC'd digests, /v1/receipts/{id}, x-gateway-receipt header.
+  Codex F11, F12.
+* **PR #8 (PR-A1.5)** — Transparency state wired, Rekor publisher
+  spawned, /v1/transparency/head route, gateway verify CLI, README
+  "Receipts and tamper-evidence" section. Codex F10, F14, F15.
+* **PR #9 (PR-B)** — Canary fingerprint framework, four feature
+  scoring, /v1/canary/status, gateway canary bootstrap/show CLI.
+  Codex F16, F17, F18, F19-partial.
+
+Tests: 318 → 377 (+59). Clippy clean throughout.
+
+## Open verifiability items (P2 / PR-B.1)
+
+* **PR-B.1 — runtime probe payload.** The canary probe loop runs but
+  is a no-op until live HTTP calls against the configured upstream
+  are wired. Adds the daily-seeded jitter prompt selection. Blocks
+  the "5-minute swap detection" promise from being real.
+* **F9 — streaming response_hmac finalisation.** Today response_hmac
+  is empty for both streaming and non-streaming requests; the rolling
+  HMAC over the response stream needs to write back to the audit
+  entry, which requires audit-log entry-update support that doesn't
+  exist yet. Revisit when there's a customer who wants verifiable
+  response integrity.
+* **F13 — KMS-backed signer.** PR-A1.5 ships with file-or-env Ed25519
+  key. KMS/HSM signer is a small refactor to a Signer trait; revisit
+  before any managed production deployment.
+* **Multi-replica audit chain coordination.** Single-host file lock
+  landed in PR-A0. Revisit when deploying >1 proxy replica.
+* **Rekor sharding policy.** Periodic Merkle checkpoints scale
+  ~100x better than per-request. Revisit at >1M receipts/day.
+
+---
+
+## P1 — Verifiability (planned 2026-04-25, COMPLETE)
 
 ### PR-A0: Harden existing audit.rs (~1 day CC)
 
